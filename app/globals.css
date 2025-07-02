@@ -1,0 +1,155 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Mobile-first responsive design */
+@media (max-width: 768px) {
+  body {
+    font-size: 14px;
+  }
+
+  /* Better touch targets */
+  button,
+  input,
+  textarea {
+    min-height: 44px;
+  }
+
+  /* Prevent zoom on input focus */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* Touch-friendly interactions */
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Prevent text selection on UI elements */
+.no-select {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 15px rgba(99, 102, 241, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(99, 102, 241, 0.7);
+  }
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes levelUp {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.stat-card {
+  @apply bg-black/40 border border-indigo-800 backdrop-blur p-4 text-center cursor-pointer rounded-xl touch-target;
+  animation: pulse-glow 3s infinite;
+  transition: all 0.3s ease;
+}
+
+.stat-card:hover,
+.stat-card:active {
+  @apply scale-105 border-indigo-400;
+  animation: none;
+  box-shadow: 0 0 30px rgba(99, 102, 241, 0.8);
+}
+
+.xp-bar {
+  @apply h-2 rounded-full;
+  background: linear-gradient(90deg, #4f46e5, #6366f1, #818cf8);
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.6);
+}
+
+.floating-text {
+  animation: float 2s infinite ease-in-out;
+}
+
+.level-up {
+  animation: levelUp 0.5s ease-in-out;
+}
+
+.streak-active {
+  @apply bg-gradient-to-r from-indigo-500 to-purple-500;
+  background-size: 200% 200%;
+  animation: gradient 2s ease infinite;
+}
+
+@keyframes gradient {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* Smooth transitions for theme changes */
+.theme-transition {
+  transition: all 0.5s ease-in-out;
+}
+
+/* Mobile navigation improvements */
+.mobile-nav {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  backdrop-filter: blur(10px);
+}
+
+/* Better mobile modals */
+@media (max-width: 768px) {
+  .modal-content {
+    margin: 1rem;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+}
+
+/* Scrollbar hiding utility */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
