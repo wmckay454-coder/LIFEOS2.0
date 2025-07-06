@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Smartphone,
   Download,
@@ -16,6 +18,8 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
+  Send,
+  Settings,
 } from "lucide-react"
 import { pwaManager } from "@/lib/utils/pwa-manager"
 
@@ -34,10 +38,14 @@ function PWAStatus() {
 
   const [isOnline, setIsOnline] = useState(true)
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default")
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [testNotificationData, setTestNotificationData] = useState({
+    title: "Test Notification",
+    body: "This is a test notification from Life OS!",
+    useAPI: false,
+  })
 
   useEffect(() => {
-    // Initialize PWA status
     updateStatus()
 
     // Listen for online/offline events
@@ -47,18 +55,11 @@ function PWAStatus() {
     window.addEventListener("online", handleOnline)
     window.addEventListener("offline", handleOffline)
 
-    // Listen for install prompt
-    const handleInstallPrompt = (e: any) => {
-      setDeferredPrompt(e.detail)
-      updateStatus()
-    }
+    // Listen for PWA events
+    const handleInstallAvailable = () => updateStatus()
+    const handleInstalled = () => updateStatus()
 
-    const handleInstalled = () => {
-      setDeferredPrompt(null)
-      updateStatus()
-    }
-
-    window.addEventListener("pwa-install-available", handleInstallPrompt)
+    window.addEventListener("pwa-install-available", handleInstallAvailable)
     window.addEventListener("pwa-installed", handleInstalled)
 
     // Check notification permission
@@ -69,7 +70,7 @@ function PWAStatus() {
     return () => {
       window.removeEventListener("online", handleOnline)
       window.removeEventListener("offline", handleOffline)
-      window.removeEventListener("pwa-install-available", handleInstallPrompt)
+      window.removeEventListener("pwa-install-available", handleInstallAvailable)
       window.removeEventListener("pwa-installed", handleInstalled)
     }
   }, [])
@@ -81,47 +82,83 @@ function PWAStatus() {
   }
 
   const handleInstall = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt()
-      const { outcome } = await deferredPrompt.userChoice
-      console.log("Install prompt outcome:", outcome)
-      setDeferredPrompt(null)
+    setIsLoading(true)
+    try {
+      const success = await pwaManager.showInstallPrompt()
+      if (success) {
+        console.log("PWA installation initiated")
+        updateStatus()
+      }
+    } catch (error) {
+      console.error("Failed to install PWA:", error)
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  const handleNotificationTest = async () => {
+  const handleRequestNotificationPermission = async () => {
+    setIsLoading(true)
     try {
-      if (notificationPermission === "default") {
-        const permission = await Notification.requestPermission()
-        setNotificationPermission(permission)
+      const permission = await pwaManager.requestNotificationPermission()
+      setNotificationPermission(permission)
+    } catch (error) {
+      console.error("Failed to request notification permission:", error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleTestNotification = async () => {
+    setIsLoading(true)
+    try {
+      let success = false
+
+      if (testNotificationData.useAPI) {
+        // Test via API endpoint
+        success = await pwaManager.testNotificationViaAPI({
+          title: testNotificationData.title,
+          body: testNotificationData.body,
+          icon: "/icon-192x192.png",
+          data: { test: true, timestamp: Date.now() },
+        })
+      } else {
+        // Test via postMessage to service worker
+        success = await pwaManager.testNotification(testNotificationData.title, testNotificationData.body)
       }
 
-      if (notificationPermission === "granted") {
-        await pwaManager.showNotification("Test Notification", {
-          body: "This is a test notification from Life OS!",
-          tag: "test-notification",
-        })
+      if (success) {
+        console.log("Test notification sent successfully")
+      } else {
+        console.error("Test notification failed")
       }
     } catch (error) {
-      console.error("Failed to show test notification:", error)
+      console.error("Failed to send test notification:", error)
+    } finally {
+      setIsLoading(false)
     }
   }
 
   const handleCheckUpdates = async () => {
+    setIsLoading(true)
     try {
       await pwaManager.checkForUpdates()
       updateStatus()
     } catch (error) {
       console.error("Failed to check for updates:", error)
+    } finally {
+      setIsLoading(false)
     }
   }
 
   const handleClearCache = async () => {
+    setIsLoading(true)
     try {
       await pwaManager.clearCache()
       window.location.reload()
     } catch (error) {
       console.error("Failed to clear cache:", error)
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -133,8 +170,18 @@ function PWAStatus() {
     return <Badge variant={status ? "default" : "secondary"}>{status ? trueText : falseText}</Badge>
   }
 
+  const getPermissionBadge = (permission: NotificationPermission) => {
+    const variants = {
+      granted: "default",
+      denied: "destructive",
+      default: "secondary",
+    } as const
+
+    return <Badge variant={variants[permission]}>{permission}</Badge>
+  }
+
   return (
-    <Card className="w-full max-w-2xl">
+    <Card className="w-full max-w-4xl mx-auto">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Smartphone className="h-5 w-5" />
@@ -171,8 +218,8 @@ function PWAStatus() {
               </div>
             </div>
           </div>
-          {deferredPrompt && (
-            <Button onClick={handleInstall} className="w-full">
+          {installStatus.canInstall && (
+            <Button onClick={handleInstall} disabled={isLoading} className="w-full">
               <Download className="h-4 w-4 mr-2" />
               Install Life OS
             </Button>
@@ -184,7 +231,7 @@ function PWAStatus() {
         {/* Service Worker Status */}
         <div className="space-y-3">
           <h3 className="font-semibold flex items-center gap-2">
-            <RefreshCw className="h-4 w-4" />
+            <Settings className="h-4 w-4" />
             Service Worker Status
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -230,30 +277,100 @@ function PWAStatus() {
                 <Bell className="h-4 w-4" />
                 Notifications
               </span>
-              <Badge variant={notificationPermission === "granted" ? "default" : "secondary"}>
-                {notificationPermission}
-              </Badge>
+              {getPermissionBadge(notificationPermission)}
             </div>
           </div>
+          {notificationPermission !== "granted" && (
+            <Button
+              onClick={handleRequestNotificationPermission}
+              disabled={isLoading}
+              variant="outline"
+              className="w-full bg-transparent"
+            >
+              <Bell className="h-4 w-4 mr-2" />
+              Request Notification Permission
+            </Button>
+          )}
+        </div>
+
+        <Separator />
+
+        {/* Test Notification Section */}
+        <div className="space-y-3">
+          <h3 className="font-semibold flex items-center gap-2">
+            <Send className="h-4 w-4" />
+            Test Notifications
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="notification-title">Title</Label>
+              <Input
+                id="notification-title"
+                value={testNotificationData.title}
+                onChange={(e) => setTestNotificationData((prev) => ({ ...prev, title: e.target.value }))}
+                placeholder="Notification title"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="notification-body">Body</Label>
+              <Input
+                id="notification-body"
+                value={testNotificationData.body}
+                onChange={(e) => setTestNotificationData((prev) => ({ ...prev, body: e.target.value }))}
+                placeholder="Notification body"
+              />
+            </div>
+          </div>
+          <div className="flex items-center space-x-2">
+            <input
+              type="checkbox"
+              id="use-api"
+              checked={testNotificationData.useAPI}
+              onChange={(e) => setTestNotificationData((prev) => ({ ...prev, useAPI: e.target.checked }))}
+              className="rounded"
+            />
+            <Label htmlFor="use-api" className="text-sm">
+              Test via API endpoint (simulates push notification)
+            </Label>
+          </div>
+          <Button
+            onClick={handleTestNotification}
+            disabled={isLoading || notificationPermission !== "granted"}
+            className="w-full"
+          >
+            <Send className="h-4 w-4 mr-2" />
+            {isLoading ? "Sending..." : "Send Test Notification"}
+          </Button>
+          {notificationPermission !== "granted" && (
+            <p className="text-sm text-muted-foreground">Notification permission required to test notifications</p>
+          )}
         </div>
 
         <Separator />
 
         {/* Actions */}
         <div className="space-y-3">
-          <h3 className="font-semibold">Actions</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <Button onClick={handleNotificationTest} variant="outline" size="sm">
-              <Bell className="h-4 w-4 mr-2" />
-              Test Notification
-            </Button>
-            <Button onClick={handleCheckUpdates} variant="outline" size="sm">
+          <h3 className="font-semibold">Management Actions</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Button
+              onClick={handleCheckUpdates}
+              disabled={isLoading}
+              variant="outline"
+              size="sm"
+              className="bg-transparent"
+            >
               <RefreshCw className="h-4 w-4 mr-2" />
-              Check Updates
+              Check for Updates
             </Button>
-            <Button onClick={handleClearCache} variant="outline" size="sm">
+            <Button
+              onClick={handleClearCache}
+              disabled={isLoading}
+              variant="outline"
+              size="sm"
+              className="bg-transparent"
+            >
               <Trash2 className="h-4 w-4 mr-2" />
-              Clear Cache
+              Clear Cache & Reload
             </Button>
           </div>
         </div>
@@ -275,6 +392,9 @@ function PWAStatus() {
               ? "App is installed and running in standalone mode"
               : "App is running in browser mode"}
           </p>
+          {notificationPermission === "granted" && (
+            <p className="text-sm text-green-600 mt-1">✓ Notifications are enabled and ready for testing</p>
+          )}
         </div>
       </CardContent>
     </Card>

@@ -1,17 +1,16 @@
 // Life OS Service Worker
-// Version: 1.7.0
-// Ensures proper MIME type and PWA functionality
+// Version: 1.8.0 - Enhanced Notification Support
 
-const CACHE_NAME = "life-os-v1.7.0"
-const STATIC_CACHE = "life-os-static-v1.7.0"
-const DYNAMIC_CACHE = "life-os-dynamic-v1.7.0"
+const CACHE_NAME = "life-os-v1.8.0"
+const STATIC_CACHE = "life-os-static-v1.8.0"
+const DYNAMIC_CACHE = "life-os-dynamic-v1.8.0"
 
 // Core files to cache immediately
 const CORE_ASSETS = ["/", "/manifest.json", "/favicon.ico", "/icon-192x192.png", "/icon-512x512.png"]
 
 // Install event - cache core assets
 self.addEventListener("install", (event) => {
-  console.log("[SW] Installing Service Worker v1.7.0")
+  console.log("[SW] Installing Service Worker v1.8.0")
 
   event.waitUntil(
     caches
@@ -32,7 +31,7 @@ self.addEventListener("install", (event) => {
 
 // Activate event - clean up old caches
 self.addEventListener("activate", (event) => {
-  console.log("[SW] Activating Service Worker v1.7.0")
+  console.log("[SW] Activating Service Worker v1.8.0")
 
   event.waitUntil(
     caches
@@ -131,29 +130,61 @@ self.addEventListener("fetch", (event) => {
   )
 })
 
-// Push notification event
+// Push notification event - Enhanced with proper error handling
 self.addEventListener("push", (event) => {
-  console.log("[SW] Push notification received")
+  console.log("[SW] Push notification received:", event)
 
-  let notificationData = {}
+  let notificationData = {
+    title: "Life OS",
+    body: "You have a new notification",
+    icon: "/icon-192x192.png",
+    badge: "/icon-192x192.png",
+    tag: "default",
+    data: {},
+    requireInteraction: false,
+    silent: false,
+    timestamp: Date.now(),
+  }
 
+  // Parse push data if available
   if (event.data) {
     try {
-      notificationData = event.data.json()
+      const pushData = event.data.json()
+      console.log("[SW] Push data received:", pushData)
+
+      notificationData = {
+        ...notificationData,
+        ...pushData,
+        // Ensure required fields are present
+        title: pushData.title || notificationData.title,
+        body: pushData.body || notificationData.body,
+        icon: pushData.icon || notificationData.icon,
+        badge: pushData.badge || notificationData.badge,
+        tag: pushData.tag || `notification-${Date.now()}`,
+        data: pushData.data || {},
+        requireInteraction: pushData.requireInteraction || false,
+        silent: pushData.silent || false,
+        timestamp: pushData.timestamp || Date.now(),
+      }
     } catch (error) {
       console.error("[SW] Error parsing push data:", error)
-      notificationData = { title: "Life OS", body: event.data.text() || "New notification" }
+      // Use text data as body if JSON parsing fails
+      if (event.data.text) {
+        notificationData.body = event.data.text()
+      }
     }
   }
 
-  const title = notificationData.title || "Life OS"
-  const options = {
-    body: notificationData.body || "You have a new notification",
-    icon: "/icon-192x192.png",
-    badge: "/icon-192x192.png",
-    tag: notificationData.tag || "default",
-    data: notificationData.data || {},
-    requireInteraction: false,
+  // Enhanced notification options
+  const notificationOptions = {
+    body: notificationData.body,
+    icon: notificationData.icon,
+    badge: notificationData.badge,
+    tag: notificationData.tag,
+    data: notificationData.data,
+    requireInteraction: notificationData.requireInteraction,
+    silent: notificationData.silent,
+    timestamp: notificationData.timestamp,
     actions: [
       {
         action: "view",
@@ -165,31 +196,65 @@ self.addEventListener("push", (event) => {
         title: "Dismiss",
       },
     ],
+    // Additional options for better UX
+    vibrate: [100, 50, 100],
+    renotify: true,
+    sticky: false,
   }
+
+  console.log("[SW] Showing notification with options:", notificationOptions)
 
   event.waitUntil(
     self.registration
-      .showNotification(title, options)
+      .showNotification(notificationData.title, notificationOptions)
       .then(() => {
         console.log("[SW] Notification displayed successfully")
+
+        // Send confirmation back to clients
+        return self.clients.matchAll().then((clients) => {
+          clients.forEach((client) => {
+            client.postMessage({
+              type: "NOTIFICATION_SHOWN",
+              notification: notificationData,
+            })
+          })
+        })
       })
       .catch((error) => {
         console.error("[SW] Failed to show notification:", error)
+
+        // Send error back to clients
+        return self.clients.matchAll().then((clients) => {
+          clients.forEach((client) => {
+            client.postMessage({
+              type: "NOTIFICATION_ERROR",
+              error: error.message,
+            })
+          })
+        })
       }),
   )
 })
 
-// Notification click event
+// Notification click event - Enhanced with action handling
 self.addEventListener("notificationclick", (event) => {
-  console.log("[SW] Notification clicked:", event.action)
+  console.log("[SW] Notification clicked:", event.action, event.notification)
 
   event.notification.close()
 
+  // Handle different actions
   if (event.action === "dismiss") {
+    console.log("[SW] Notification dismissed")
     return
   }
 
+  // Default action or "view" action
   const urlToOpen = event.notification.data?.url || "/"
+  const notificationData = {
+    tag: event.notification.tag,
+    data: event.notification.data,
+    action: event.action || "default",
+  }
 
   event.waitUntil(
     self.clients
@@ -199,6 +264,11 @@ self.addEventListener("notificationclick", (event) => {
         for (const client of clientList) {
           if (client.url === urlToOpen && "focus" in client) {
             console.log("[SW] Focusing existing window")
+            // Send notification click data to the focused window
+            client.postMessage({
+              type: "NOTIFICATION_CLICKED",
+              notification: notificationData,
+            })
             return client.focus()
           }
         }
@@ -206,7 +276,16 @@ self.addEventListener("notificationclick", (event) => {
         // Open new window if none exists
         if (self.clients.openWindow) {
           console.log("[SW] Opening new window:", urlToOpen)
-          return self.clients.openWindow(urlToOpen)
+          return self.clients.openWindow(urlToOpen).then((newClient) => {
+            // Send notification click data to the new window
+            if (newClient) {
+              newClient.postMessage({
+                type: "NOTIFICATION_CLICKED",
+                notification: notificationData,
+              })
+            }
+            return newClient
+          })
         }
       })
       .catch((error) => {
@@ -215,7 +294,7 @@ self.addEventListener("notificationclick", (event) => {
   )
 })
 
-// Background sync event
+// Background sync event - Enhanced
 self.addEventListener("sync", (event) => {
   console.log("[SW] Background sync triggered:", event.tag)
 
@@ -224,15 +303,43 @@ self.addEventListener("sync", (event) => {
       Promise.resolve()
         .then(() => {
           console.log("[SW] Background sync completed")
+
+          // Notify clients about sync completion
+          return self.clients.matchAll().then((clients) => {
+            clients.forEach((client) => {
+              client.postMessage({
+                type: "SYNC_COMPLETED",
+                tag: event.tag,
+              })
+            })
+          })
         })
         .catch((error) => {
           console.error("[SW] Background sync failed:", error)
         }),
     )
   }
+
+  // Handle notification sync
+  if (event.tag === "notification-sync") {
+    event.waitUntil(
+      self.registration
+        .showNotification("Background Sync", {
+          body: "Data has been synchronized in the background",
+          icon: "/icon-192x192.png",
+          tag: "sync-notification",
+        })
+        .then(() => {
+          console.log("[SW] Sync notification shown")
+        })
+        .catch((error) => {
+          console.error("[SW] Failed to show sync notification:", error)
+        }),
+    )
+  }
 })
 
-// Message event - handle messages from main thread
+// Message event - Enhanced with notification testing
 self.addEventListener("message", (event) => {
   console.log("[SW] Message received:", event.data)
 
@@ -242,18 +349,106 @@ self.addEventListener("message", (event) => {
   }
 
   if (event.data && event.data.type === "GET_VERSION") {
-    event.ports[0].postMessage({ version: "1.7.0" })
+    event.ports[0].postMessage({ version: "1.8.0" })
+  }
+
+  // Handle test notification request
+  if (event.data && event.data.type === "TEST_NOTIFICATION") {
+    console.log("[SW] Test notification requested")
+
+    const testNotificationData = {
+      title: event.data.title || "Test Notification",
+      body: event.data.body || "This is a test notification from Life OS!",
+      icon: "/icon-192x192.png",
+      badge: "/icon-192x192.png",
+      tag: "test-notification",
+      data: { test: true, timestamp: Date.now() },
+      requireInteraction: false,
+      silent: false,
+    }
+
+    const notificationOptions = {
+      body: testNotificationData.body,
+      icon: testNotificationData.icon,
+      badge: testNotificationData.badge,
+      tag: testNotificationData.tag,
+      data: testNotificationData.data,
+      requireInteraction: testNotificationData.requireInteraction,
+      silent: testNotificationData.silent,
+      vibrate: [200, 100, 200],
+      actions: [
+        {
+          action: "view",
+          title: "View",
+          icon: "/icon-192x192.png",
+        },
+        {
+          action: "dismiss",
+          title: "Dismiss",
+        },
+      ],
+    }
+
+    self.registration
+      .showNotification(testNotificationData.title, notificationOptions)
+      .then(() => {
+        console.log("[SW] Test notification shown successfully")
+        event.ports[0].postMessage({
+          success: true,
+          message: "Test notification shown successfully",
+        })
+      })
+      .catch((error) => {
+        console.error("[SW] Failed to show test notification:", error)
+        event.ports[0].postMessage({
+          success: false,
+          error: error.message,
+        })
+      })
+  }
+
+  // Handle notification permission check
+  if (event.data && event.data.type === "CHECK_NOTIFICATION_PERMISSION") {
+    // Note: Service workers can't directly check Notification.permission
+    // This needs to be handled by the main thread
+    event.ports[0].postMessage({
+      message: "Notification permission check must be done from main thread",
+    })
   }
 })
 
-// Error event
+// Error event - Enhanced logging
 self.addEventListener("error", (event) => {
-  console.error("[SW] Service Worker error:", event.error)
+  console.error("[SW] Service Worker error:", event.error, event.filename, event.lineno)
+
+  // Send error to clients for debugging
+  self.clients.matchAll().then((clients) => {
+    clients.forEach((client) => {
+      client.postMessage({
+        type: "SW_ERROR",
+        error: {
+          message: event.error?.message || "Unknown error",
+          filename: event.filename,
+          lineno: event.lineno,
+        },
+      })
+    })
+  })
 })
 
-// Unhandled rejection event
+// Unhandled rejection event - Enhanced logging
 self.addEventListener("unhandledrejection", (event) => {
   console.error("[SW] Unhandled promise rejection:", event.reason)
+
+  // Send rejection to clients for debugging
+  self.clients.matchAll().then((clients) => {
+    clients.forEach((client) => {
+      client.postMessage({
+        type: "SW_UNHANDLED_REJECTION",
+        reason: event.reason?.message || event.reason,
+      })
+    })
+  })
 })
 
-console.log("[SW] Service Worker script loaded successfully")
+console.log("[SW] Service Worker v1.8.0 script loaded successfully with enhanced notification support")

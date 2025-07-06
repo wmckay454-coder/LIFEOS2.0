@@ -1,7 +1,13 @@
-export class PWAManager {
+class PWAManager {
   private static instance: PWAManager
+  private deferredPrompt: any = null
   private registration: ServiceWorkerRegistration | null = null
-  private isInitialized = false
+
+  private constructor() {
+    if (typeof window !== "undefined") {
+      this.initialize()
+    }
+  }
 
   static getInstance(): PWAManager {
     if (!PWAManager.instance) {
@@ -10,193 +16,226 @@ export class PWAManager {
     return PWAManager.instance
   }
 
-  async initialize(): Promise<void> {
-    if (this.isInitialized) return
-
+  private async initialize() {
     try {
-      console.log("🔧 Initializing PWA Manager...")
+      // Register service worker
+      if ("serviceWorker" in navigator) {
+        this.registration = await navigator.serviceWorker.register("/sw.js", {
+          scope: "/",
+        })
+        console.log("Service Worker registered successfully:", this.registration)
 
-      // Check if service workers are supported
-      if (!("serviceWorker" in navigator)) {
-        console.warn("⚠️ Service Workers not supported")
-        return
+        // Listen for service worker messages
+        navigator.serviceWorker.addEventListener("message", (event) => {
+          console.log("Message from Service Worker:", event.data)
+
+          if (event.data.type === "NOTIFICATION_SHOWN") {
+            console.log("Notification shown:", event.data.notification)
+          }
+
+          if (event.data.type === "NOTIFICATION_ERROR") {
+            console.error("Notification error:", event.data.error)
+          }
+
+          if (event.data.type === "NOTIFICATION_CLICKED") {
+            console.log("Notification clicked:", event.data.notification)
+            // Handle notification click in your app
+          }
+        })
       }
 
-      // Unregister any existing service workers first
-      await this.unregisterExistingWorkers()
-
-      // Register new service worker
-      await this.registerServiceWorker()
-
-      // Initialize other PWA features
-      await this.initializeNotifications()
-      await this.initializeInstallPrompt()
-
-      this.isInitialized = true
-      console.log("✅ PWA Manager initialized successfully")
-    } catch (error) {
-      console.error("❌ PWA Manager initialization failed:", error)
-      throw error
-    }
-  }
-
-  private async unregisterExistingWorkers(): Promise<void> {
-    try {
-      const registrations = await navigator.serviceWorker.getRegistrations()
-      for (const registration of registrations) {
-        console.log("🗑️ Unregistering existing service worker")
-        await registration.unregister()
-      }
-    } catch (error) {
-      console.warn("⚠️ Failed to unregister existing workers:", error)
-    }
-  }
-
-  private async registerServiceWorker(): Promise<void> {
-    try {
-      console.log("📝 Registering service worker...")
-
-      this.registration = await navigator.serviceWorker.register("/sw.js", {
-        scope: "/",
-        updateViaCache: "none",
-      })
-
-      console.log("✅ Service Worker registered successfully")
-
-      // Handle updates
-      this.registration.addEventListener("updatefound", () => {
-        console.log("🔄 Service Worker update found")
-        const newWorker = this.registration?.installing
-        if (newWorker) {
-          newWorker.addEventListener("statechange", () => {
-            if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
-              console.log("🆕 New Service Worker available")
-              // Optionally notify user about update
-            }
-          })
-        }
-      })
-
-      // Wait for service worker to be ready
-      await navigator.serviceWorker.ready
-      console.log("🚀 Service Worker is ready")
-    } catch (error) {
-      console.error("❌ Service Worker registration failed:", error)
-      throw error
-    }
-  }
-
-  private async initializeNotifications(): Promise<void> {
-    try {
-      if (!("Notification" in window)) {
-        console.warn("⚠️ Notifications not supported")
-        return
-      }
-
-      if (Notification.permission === "default") {
-        console.log("🔔 Requesting notification permission...")
-        const permission = await Notification.requestPermission()
-        console.log("🔔 Notification permission:", permission)
-      }
-    } catch (error) {
-      console.warn("⚠️ Failed to initialize notifications:", error)
-    }
-  }
-
-  private async initializeInstallPrompt(): Promise<void> {
-    try {
-      let deferredPrompt: any = null
-
+      // Listen for install prompt
       window.addEventListener("beforeinstallprompt", (e) => {
-        console.log("📱 Install prompt available")
         e.preventDefault()
-        deferredPrompt = e
+        this.deferredPrompt = e
+        console.log("Install prompt available")
 
-        // Dispatch custom event for UI components
-        window.dispatchEvent(new CustomEvent("pwa-install-available", { detail: deferredPrompt }))
+        // Dispatch custom event
+        window.dispatchEvent(new CustomEvent("pwa-install-available", { detail: e }))
       })
 
+      // Listen for app installed
       window.addEventListener("appinstalled", () => {
-        console.log("✅ PWA installed successfully")
-        deferredPrompt = null
+        console.log("PWA was installed")
+        this.deferredPrompt = null
+
+        // Dispatch custom event
         window.dispatchEvent(new CustomEvent("pwa-installed"))
       })
     } catch (error) {
-      console.warn("⚠️ Failed to initialize install prompt:", error)
+      console.error("PWA Manager initialization failed:", error)
     }
   }
 
-  async showNotification(title: string, options: NotificationOptions = {}): Promise<void> {
-    if (!this.registration) {
-      throw new Error("Service Worker not registered")
-    }
-
-    if (Notification.permission !== "granted") {
-      throw new Error("Notification permission not granted")
-    }
-
-    const defaultOptions: NotificationOptions = {
-      icon: "/icon-192x192.png",
-      badge: "/icon-192x192.png",
-      tag: "life-os-notification",
-      requireInteraction: false,
-      ...options,
-    }
-
-    await this.registration.showNotification(title, defaultOptions)
-  }
-
-  async scheduleNotification(title: string, options: NotificationOptions, delay: number): Promise<void> {
-    setTimeout(async () => {
-      try {
-        await this.showNotification(title, options)
-      } catch (error) {
-        console.error("❌ Failed to show scheduled notification:", error)
+  // Test notification using postMessage to service worker
+  async testNotification(title?: string, body?: string): Promise<boolean> {
+    try {
+      if (!this.registration) {
+        throw new Error("Service Worker not registered")
       }
-    }, delay)
+
+      // Check notification permission
+      if (Notification.permission !== "granted") {
+        const permission = await Notification.requestPermission()
+        if (permission !== "granted") {
+          throw new Error("Notification permission denied")
+        }
+      }
+
+      // Send test notification message to service worker
+      return new Promise((resolve, reject) => {
+        const messageChannel = new MessageChannel()
+
+        messageChannel.port1.onmessage = (event) => {
+          if (event.data.success) {
+            console.log("Test notification sent successfully")
+            resolve(true)
+          } else {
+            console.error("Test notification failed:", event.data.error)
+            reject(new Error(event.data.error))
+          }
+        }
+
+        if (this.registration?.active) {
+          this.registration.active.postMessage(
+            {
+              type: "TEST_NOTIFICATION",
+              title: title || "Test Notification",
+              body: body || "This is a test notification from Life OS!",
+            },
+            [messageChannel.port2],
+          )
+        } else {
+          reject(new Error("Service Worker not active"))
+        }
+      })
+    } catch (error) {
+      console.error("Failed to send test notification:", error)
+      return false
+    }
   }
 
-  getInstallationStatus(): {
-    isInstalled: boolean
-    isStandalone: boolean
-    canInstall: boolean
-  } {
+  // Test notification using API endpoint
+  async testNotificationViaAPI(notificationData: any): Promise<boolean> {
+    try {
+      const response = await fetch("/api/notify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(notificationData),
+      })
+
+      const result = await response.json()
+
+      if (result.success) {
+        console.log("Notification API called successfully:", result)
+
+        // Simulate push notification by calling service worker directly
+        if (this.registration?.active) {
+          // Create a simulated push event
+          const pushData = {
+            title: notificationData.title,
+            body: notificationData.body,
+            icon: notificationData.icon,
+            data: notificationData.data,
+          }
+
+          // Send message to service worker to simulate push
+          this.registration.active.postMessage({
+            type: "TEST_NOTIFICATION",
+            ...pushData,
+          })
+        }
+
+        return true
+      } else {
+        throw new Error(result.error)
+      }
+    } catch (error) {
+      console.error("Failed to test notification via API:", error)
+      return false
+    }
+  }
+
+  // Request notification permission
+  async requestNotificationPermission(): Promise<NotificationPermission> {
+    if ("Notification" in window) {
+      const permission = await Notification.requestPermission()
+      console.log("Notification permission:", permission)
+      return permission
+    }
+    return "denied"
+  }
+
+  // Show install prompt
+  async showInstallPrompt(): Promise<boolean> {
+    if (this.deferredPrompt) {
+      try {
+        this.deferredPrompt.prompt()
+        const { outcome } = await this.deferredPrompt.userChoice
+        console.log("Install prompt outcome:", outcome)
+
+        if (outcome === "accepted") {
+          this.deferredPrompt = null
+          return true
+        }
+      } catch (error) {
+        console.error("Error showing install prompt:", error)
+      }
+    }
+    return false
+  }
+
+  // Get installation status
+  getInstallationStatus() {
     const isStandalone =
       window.matchMedia("(display-mode: standalone)").matches || (window.navigator as any).standalone === true
 
     return {
       isInstalled: isStandalone,
-      isStandalone,
-      canInstall: !isStandalone && "serviceWorker" in navigator,
+      isStandalone: isStandalone,
+      canInstall: !!this.deferredPrompt,
     }
   }
 
-  getServiceWorkerStatus(): {
-    isRegistered: boolean
-    isActive: boolean
-    version: string | null
-  } {
+  // Get service worker status
+  getServiceWorkerStatus() {
+    if (!this.registration) {
+      return {
+        isRegistered: false,
+        isActive: false,
+        version: null,
+      }
+    }
+
     return {
-      isRegistered: !!this.registration,
-      isActive: !!this.registration?.active,
-      version: this.registration?.active?.scriptURL.includes("v1.7.0") ? "1.7.0" : null,
+      isRegistered: true,
+      isActive: !!this.registration.active,
+      version: "1.8.0",
     }
   }
 
-  async checkForUpdates(): Promise<void> {
-    if (this.registration) {
-      await this.registration.update()
-    }
-  }
-
+  // Clear cache
   async clearCache(): Promise<void> {
     if ("caches" in window) {
       const cacheNames = await caches.keys()
-      await Promise.all(cacheNames.map((name) => caches.delete(name)))
-      console.log("🗑️ All caches cleared")
+      await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)))
+      console.log("All caches cleared")
+    }
+  }
+
+  // Check for updates
+  async checkForUpdates(): Promise<void> {
+    if (this.registration) {
+      await this.registration.update()
+      console.log("Service Worker update check completed")
     }
   }
 }
 
+// Export singleton instance
 export const pwaManager = PWAManager.getInstance()
+
+// Export class for type checking
 export default PWAManager
