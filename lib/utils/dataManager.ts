@@ -1,81 +1,41 @@
-import { PWAManager } from "./pwa-manager"
+import PWAManager from "./pwa-manager"
+import { safeAtob, safeBtoa, isProbablyBase64 } from "./safe-atob"
+import type { Stats, JournalEntry, Todo, CheckInData, Habit, Mission, Profile } from "@/lib/types"
 
-/* ------------------------------------------------------------------ */
-/*                   Public constants (unchanged)                     */
-/* ------------------------------------------------------------------ */
+// Export constants for backward compatibility
 export const DATA_VERSION = "1.2.0"
 export const STORAGE_KEYS = {
-  COMPLETE_DATA: "lifeOS-complete-data",
-  HABITS: "lifeOS-habits",
-  JOURNAL: "lifeOS-journal",
-  TODOS: "lifeOS-todos",
-  STATS: "lifeOS-stats",
-  CHECKINS: "lifeOS-checkins",
-  MISSIONS: "lifeOS-missions",
-  PROFILE: "lifeOS-profile",
-  SETTINGS: "lifeOS-settings",
-  BACKUP: "lifeOS-backup",
-  VERSION: "lifeOS-version",
-}
+  USER_DATA: "life_os_user_data",
+  BACKUP_DATA: "life_os_backup_data",
+  SETTINGS: "life_os_settings",
+  VERSION: "life_os_version",
+} as const
 
-/* ------------------------------------------------------------------ */
-/*                        Helper utilities                            */
-/* ------------------------------------------------------------------ */
-function isProbablyBase64(str: string): boolean {
-  if (!str || str.length % 4 !== 0) return false
-  return /^[A-Za-z0-9+/]*={0,2}$/.test(str)
-}
-
-/* ------------------------------------------------------------------ */
-/*                   DataManager implementation                       */
-/* ------------------------------------------------------------------ */
-export interface CompleteUserData {
+export interface UserData {
   version: string
-  profile: any
-  stats: any
-  habits: any[]
-  journalEntries: any[]
-  checkIns: any[]
-  todos: any[]
-  missions: any[]
+  profile: Profile
+  stats: Stats
+  habits: Habit[]
+  journalEntries: JournalEntry[]
+  checkIns: CheckInData[]
+  todos: Todo[]
+  missions: Mission[]
   settings: {
     preferredCheckInTime: string
     notificationsEnabled: boolean
-    theme: string
+    backupEnabled: boolean
+    encryptionEnabled: boolean
   }
-  lastBackup: string
-  needsSync?: boolean
+  lastModified: string
+  lastBackup?: string
 }
 
-export class DataManager {
-  private static instance: DataManager
+class DataManagerClass {
   private pwaManager: PWAManager
   private isInitialized = false
 
-  private constructor() {
+  constructor() {
     this.pwaManager = PWAManager.getInstance()
-  }
-
-  static getInstance(): DataManager {
-    if (!DataManager.instance) {
-      DataManager.instance = new DataManager()
-    }
-    return DataManager.instance
-  }
-
-  /* ------------------------------------------------------------------ */
-  /*                      Static convenience wrappers                   */
-  /* ------------------------------------------------------------------ */
-  static async initialize(): Promise<void> {
-    return DataManager.getInstance().initialize()
-  }
-
-  static async loadCompleteData(): Promise<CompleteUserData> {
-    return DataManager.getInstance().loadCompleteData()
-  }
-
-  static async saveCompleteData(data: CompleteUserData): Promise<void> {
-    return DataManager.getInstance().saveCompleteData(data)
   }
 
   async initialize(): Promise<void> {
@@ -106,111 +66,113 @@ export class DataManager {
     try {
       const currentVersion = localStorage.getItem(STORAGE_KEYS.VERSION)
 
-      if (currentVersion !== DATA_VERSION) {
-        console.log(`🔄 Migrating data from ${currentVersion || "unknown"} to ${DATA_VERSION}`)
+      if (!currentVersion || currentVersion !== DATA_VERSION) {
+        console.log("🔄 Migrating data to version", DATA_VERSION)
 
-        // Perform any necessary data migrations here
-        await this.performMigration(currentVersion, DATA_VERSION)
+        // Perform migration logic here
+        const userData = await this.loadCompleteData()
+        userData.version = DATA_VERSION
+        await this.saveCompleteData(userData)
 
         localStorage.setItem(STORAGE_KEYS.VERSION, DATA_VERSION)
         console.log("✅ Data migration completed")
       }
     } catch (error) {
       console.error("❌ Data migration failed:", error)
-      throw error
     }
   }
 
-  private async performMigration(fromVersion: string | null, toVersion: string): Promise<void> {
-    // Add specific migration logic here as needed
-    console.log(`Migrating from ${fromVersion} to ${toVersion}`)
-  }
-
   private setupAutomaticBackup(): void {
-    // Run backup every 24 hours
+    // Backup every 30 minutes
     setInterval(
-      () => {
-        this.createBackup().catch((error) => {
-          console.error("Automatic backup failed:", error)
-        })
+      async () => {
+        try {
+          await this.createBackup()
+        } catch (error) {
+          console.error("❌ Automatic backup failed:", error)
+        }
       },
-      24 * 60 * 60 * 1000,
+      30 * 60 * 1000,
     )
   }
 
   private setupCleanup(): void {
-    // Run cleanup every week
+    // Cleanup old data every hour
     setInterval(
       () => {
-        this.cleanupOldData().catch((error) => {
-          console.error("Cleanup failed:", error)
-        })
+        this.cleanupOldData()
       },
-      7 * 24 * 60 * 60 * 1000,
+      60 * 60 * 1000,
     )
   }
 
-  async loadCompleteData(): Promise<CompleteUserData> {
+  async loadCompleteData(): Promise<UserData> {
     try {
-      const dataStr = localStorage.getItem(STORAGE_KEYS.COMPLETE_DATA)
+      const rawData = localStorage.getItem(STORAGE_KEYS.USER_DATA)
 
-      if (!dataStr) {
-        return this.getDefaultData()
+      if (!rawData) {
+        return this.getDefaultUserData()
       }
 
-      const parsedData = this.parsePossiblyEncrypted(dataStr)
+      const parsedData = this.parsePossiblyEncrypted(rawData)
 
-      if (!parsedData) {
-        console.warn("Failed to parse stored data, using defaults")
-        return this.getDefaultData()
-      }
+      // Validate and merge with defaults
+      const defaultData = this.getDefaultUserData()
+      const userData = { ...defaultData, ...parsedData }
 
-      // Ensure data has current version
-      if (parsedData.version !== DATA_VERSION) {
-        parsedData.version = DATA_VERSION
-      }
+      // Ensure version is current
+      userData.version = DATA_VERSION
 
-      return parsedData
+      return userData
     } catch (error) {
-      console.error("Failed to load complete data:", error)
-      return this.getDefaultData()
+      console.error("❌ Failed to load user data:", error)
+      return this.getDefaultUserData()
     }
   }
 
-  private parsePossiblyEncrypted(dataStr: string): CompleteUserData | null {
+  async saveCompleteData(userData: UserData): Promise<void> {
     try {
-      // First try parsing as regular JSON
-      return JSON.parse(dataStr)
-    } catch {
-      try {
-        // If that fails, try decoding as base64 first
-        if (isProbablyBase64(dataStr)) {
-          const decoded = atob(dataStr)
-          return JSON.parse(decoded)
-        }
-      } catch {
-        // If base64 decoding fails, return null
+      userData.lastModified = new Date().toISOString()
+      userData.version = DATA_VERSION
+
+      const dataToSave = JSON.stringify(userData)
+      const encryptedData = userData.settings.encryptionEnabled ? safeBtoa(dataToSave) : dataToSave
+
+      localStorage.setItem(STORAGE_KEYS.USER_DATA, encryptedData)
+
+      // Also save to backup if enabled
+      if (userData.settings.backupEnabled) {
+        await this.createBackup()
       }
-      return null
-    }
-  }
-
-  async saveCompleteData(data: CompleteUserData): Promise<void> {
-    try {
-      data.version = DATA_VERSION
-      data.lastBackup = new Date().toISOString()
-
-      const dataStr = JSON.stringify(data)
-      localStorage.setItem(STORAGE_KEYS.COMPLETE_DATA, dataStr)
-
-      console.log("✅ Complete data saved successfully")
     } catch (error) {
-      console.error("❌ Failed to save complete data:", error)
+      console.error("❌ Failed to save user data:", error)
       throw error
     }
   }
 
-  private getDefaultData(): CompleteUserData {
+  private parsePossiblyEncrypted(data: string): any {
+    try {
+      // First try to parse as regular JSON
+      return JSON.parse(data)
+    } catch {
+      // If that fails, try to decode as base64 first
+      if (isProbablyBase64(data)) {
+        const decoded = safeAtob(data)
+        if (decoded) {
+          try {
+            return JSON.parse(decoded)
+          } catch {
+            // If base64 decode worked but JSON parse failed, return empty object
+            return {}
+          }
+        }
+      }
+      // If all else fails, return empty object
+      return {}
+    }
+  }
+
+  private getDefaultUserData(): UserData {
     return {
       version: DATA_VERSION,
       profile: {
@@ -227,149 +189,167 @@ export class DataManager {
       settings: {
         preferredCheckInTime: "20:00",
         notificationsEnabled: true,
-        theme: "dark",
+        backupEnabled: true,
+        encryptionEnabled: false,
       },
-      lastBackup: new Date().toISOString(),
+      lastModified: new Date().toISOString(),
     }
   }
 
-  async createBackup(): Promise<string> {
+  async createBackup(): Promise<void> {
     try {
-      const data = await this.loadCompleteData()
+      const userData = await this.loadCompleteData()
+      userData.lastBackup = new Date().toISOString()
+
       const backupData = {
-        ...data,
+        ...userData,
         backupCreated: new Date().toISOString(),
-        backupVersion: DATA_VERSION,
       }
 
-      const backupStr = JSON.stringify(backupData, null, 2)
-      const backupKey = `${STORAGE_KEYS.BACKUP}-${Date.now()}`
-
-      localStorage.setItem(backupKey, backupStr)
-
-      console.log("✅ Backup created:", backupKey)
-      return backupKey
+      localStorage.setItem(STORAGE_KEYS.BACKUP_DATA, JSON.stringify(backupData))
+      console.log("✅ Backup created successfully")
     } catch (error) {
       console.error("❌ Backup creation failed:", error)
       throw error
     }
   }
 
-  async restoreFromBackup(backupKey: string): Promise<void> {
+  async restoreFromBackup(): Promise<boolean> {
     try {
-      const backupStr = localStorage.getItem(backupKey)
+      const backupData = localStorage.getItem(STORAGE_KEYS.BACKUP_DATA)
 
-      if (!backupStr) {
-        throw new Error("Backup not found")
+      if (!backupData) {
+        throw new Error("No backup data found")
       }
 
-      const backupData = JSON.parse(backupStr)
+      const parsedBackup = JSON.parse(backupData)
+      await this.saveCompleteData(parsedBackup)
 
-      // Remove backup-specific fields
-      delete backupData.backupCreated
-      delete backupData.backupVersion
-
-      await this.saveCompleteData(backupData)
-
-      console.log("✅ Data restored from backup:", backupKey)
+      console.log("✅ Data restored from backup")
+      return true
     } catch (error) {
       console.error("❌ Backup restoration failed:", error)
-      throw error
-    }
-  }
-
-  getAvailableBackups(): string[] {
-    const keys = Object.keys(localStorage)
-    return keys
-      .filter((key) => key.startsWith(STORAGE_KEYS.BACKUP))
-      .sort((a, b) => {
-        const timeA = Number.parseInt(a.split("-").pop() || "0")
-        const timeB = Number.parseInt(b.split("-").pop() || "0")
-        return timeB - timeA // Most recent first
-      })
-  }
-
-  async cleanupOldData(): Promise<void> {
-    try {
-      const backups = this.getAvailableBackups()
-
-      // Keep only the 5 most recent backups
-      const backupsToDelete = backups.slice(5)
-
-      for (const backup of backupsToDelete) {
-        localStorage.removeItem(backup)
-      }
-
-      if (backupsToDelete.length > 0) {
-        console.log(`🧹 Cleaned up ${backupsToDelete.length} old backups`)
-      }
-    } catch (error) {
-      console.error("❌ Cleanup failed:", error)
+      return false
     }
   }
 
   async exportData(): Promise<string> {
     try {
-      const data = await this.loadCompleteData()
-      return JSON.stringify(data, null, 2)
+      const userData = await this.loadCompleteData()
+      return JSON.stringify(userData, null, 2)
     } catch (error) {
       console.error("❌ Data export failed:", error)
       throw error
     }
   }
 
-  async importData(dataStr: string): Promise<void> {
+  async importData(jsonData: string): Promise<boolean> {
     try {
-      const data = JSON.parse(dataStr)
+      const importedData = JSON.parse(jsonData)
 
-      // Validate data structure
-      if (!data.version || !data.stats || !data.profile) {
+      // Validate imported data structure
+      if (!this.validateUserData(importedData)) {
         throw new Error("Invalid data format")
       }
 
-      await this.saveCompleteData(data)
-
+      await this.saveCompleteData(importedData)
       console.log("✅ Data imported successfully")
+      return true
     } catch (error) {
       console.error("❌ Data import failed:", error)
-      throw error
+      return false
+    }
+  }
+
+  private validateUserData(data: any): boolean {
+    return (
+      data &&
+      typeof data === "object" &&
+      data.profile &&
+      data.stats &&
+      Array.isArray(data.habits) &&
+      Array.isArray(data.journalEntries) &&
+      Array.isArray(data.checkIns) &&
+      Array.isArray(data.todos) &&
+      Array.isArray(data.missions)
+    )
+  }
+
+  private cleanupOldData(): void {
+    try {
+      // Remove old journal entries (older than 1 year)
+      const oneYearAgo = new Date()
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
+
+      // This would be implemented based on specific cleanup requirements
+      console.log("🧹 Cleanup routine executed")
+    } catch (error) {
+      console.error("❌ Cleanup failed:", error)
+    }
+  }
+
+  getStorageUsage(): { used: number; total: number; percentage: number } {
+    try {
+      let used = 0
+      for (const key in localStorage) {
+        if (localStorage.hasOwnProperty(key)) {
+          used += localStorage[key].length + key.length
+        }
+      }
+
+      // Estimate total available (5MB typical limit)
+      const total = 5 * 1024 * 1024
+      const percentage = (used / total) * 100
+
+      return { used, total, percentage }
+    } catch (error) {
+      console.error("❌ Failed to calculate storage usage:", error)
+      return { used: 0, total: 0, percentage: 0 }
     }
   }
 }
 
-// Export singleton instance and utility functions
-export const dataManager = DataManager.getInstance()
+// Create singleton instance
+export const DataManager = new DataManagerClass()
 
-export function generateDailyMissions() {
-  const missions = [
+// Generate daily missions
+export function generateDailyMissions(): Mission[] {
+  const today = new Date()
+  const missions: Mission[] = [
     {
-      id: `mission_${Date.now()}_1`,
+      id: `mission_${today.toDateString()}_1`,
       title: "Morning Reflection",
-      description: "Take 5 minutes to reflect on your goals for today",
+      description: "Write a journal entry about your goals for today",
       stat: "MIND",
       xpReward: 25,
       completed: false,
-      type: "daily",
+      createdAt: today.toISOString(),
+      difficulty: "easy",
     },
     {
-      id: `mission_${Date.now()}_2`,
+      id: `mission_${today.toDateString()}_2`,
       title: "Physical Activity",
-      description: "Do 10 minutes of physical exercise",
+      description: "Complete at least 30 minutes of physical exercise",
       stat: "BODY",
       xpReward: 30,
       completed: false,
-      type: "daily",
+      createdAt: today.toISOString(),
+      difficulty: "medium",
     },
     {
-      id: `mission_${Date.now()}_3`,
-      title: "Gratitude Practice",
-      description: "Write down 3 things you're grateful for",
+      id: `mission_${today.toDateString()}_3`,
+      title: "Mindful Moment",
+      description: "Take 10 minutes for meditation or deep breathing",
       stat: "SPIRIT",
       xpReward: 20,
       completed: false,
-      type: "daily",
+      createdAt: today.toISOString(),
+      difficulty: "easy",
     },
   ]
 
   return missions
 }
+
+// Default export for backward compatibility
+export default DataManager

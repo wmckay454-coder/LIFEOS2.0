@@ -1,59 +1,45 @@
 {
-  "name": "Life OS - Personal Growth Tracker",
+  "name": "Life OS - Personal Life Management System",
   "short_name": "Life OS",
-  "description": "Your personal life leveling system with AI-powered insights",
+  "description": "A comprehensive personal life management system with AI-powered insights, habit tracking, and productivity tools.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#000000",
-  "theme_color": "#1e1b4b",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
   "orientation": "portrait-primary",
   "scope": "/",
   "lang": "en",
   "categories": ["productivity", "lifestyle", "health"],
-  "screenshots": [
-    {
-      "src": "/screenshot-wide.png",
-      "sizes": "1280x720",
-      "type": "image/png",
-      "form_factor": "wide"
-    },
-    {
-      "src": "/screenshot-narrow.png",
-      "sizes": "720x1280",
-      "type": "image/png",
-      "form_factor": "narrow"
-    }
-  ],
   "icons": [
     {
       "src": "/icon-72x72.png",
       "sizes": "72x72",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "/icon-96x96.png",
       "sizes": "96x96",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "/icon-128x128.png",
       "sizes": "128x128",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "/icon-144x144.png",
       "sizes": "144x144",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "/icon-152x152.png",
       "sizes": "152x152",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "/icon-192x192.png",
@@ -65,7 +51,7 @@
       "src": "/icon-384x384.png",
       "sizes": "384x384",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "/icon-512x512.png",
@@ -74,46 +60,65 @@
       "purpose": "any maskable"
     }
   ],
+  "screenshots": [
+    {
+      "src": "/screenshot-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Life OS Dashboard - Wide View"
+    },
+    {
+      "src": "/screenshot-narrow.png",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Life OS Mobile View"
+    }
+  ],
   "shortcuts": [
     {
-      "name": "Quick Check-in",
+      "name": "Daily Check-in",
       "short_name": "Check-in",
-      "description": "Quickly log your mood and energy",
-      "url": "/?view=checkin",
+      "description": "Quick daily mood and energy check-in",
+      "url": "/?shortcut=checkin",
       "icons": [
         {
           "src": "/icon-192x192.png",
-          "sizes": "192x192"
+          "sizes": "192x192",
+          "type": "image/png"
         }
       ]
     },
     {
-      "name": "Add Journal Entry",
+      "name": "Add Habit",
+      "short_name": "Habit",
+      "description": "Add a new habit to track",
+      "url": "/?shortcut=habit",
+      "icons": [
+        {
+          "src": "/icon-192x192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Journal Entry",
       "short_name": "Journal",
       "description": "Write a new journal entry",
-      "url": "/?view=journal",
+      "url": "/?shortcut=journal",
       "icons": [
         {
           "src": "/icon-192x192.png",
-          "sizes": "192x192"
-        }
-      ]
-    },
-    {
-      "name": "View Habits",
-      "short_name": "Habits",
-      "description": "Check and update your habits",
-      "url": "/?view=habits",
-      "icons": [
-        {
-          "src": "/icon-192x192.png",
-          "sizes": "192x192"
+          "sizes": "192x192",
+          "type": "image/png"
         }
       ]
     }
   ],
   "share_target": {
-    "action": "/?share-target",
+    "action": "/share",
     "method": "POST",
     "enctype": "multipart/form-data",
     "params": {
@@ -125,11 +130,7 @@
   "protocol_handlers": [
     {
       "protocol": "web+lifeos",
-      "url": "/?protocol=%s"
+      "url": "/?handler=%s"
     }
-  ],
-  "prefer_related_applications": false,
-  "edge_side_panel": {
-    "preferred_width": 400
-  }
+  ]
 }

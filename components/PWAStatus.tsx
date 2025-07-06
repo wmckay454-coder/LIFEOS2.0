@@ -1,304 +1,285 @@
 "use client"
+
 import { useState, useEffect } from "react"
-import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { PWAManager } from "@/lib/utils/pwa-manager"
-import { DeviceIntegration } from "@/lib/utils/device-integration"
-import { Wifi, WifiOff, Bell, Camera, MapPin, Smartphone, Battery, Share2, HardDrive } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Separator } from "@/components/ui/separator"
+import {
+  Smartphone,
+  Download,
+  Bell,
+  Wifi,
+  WifiOff,
+  RefreshCw,
+  Trash2,
+  CheckCircle,
+  XCircle,
+  AlertCircle,
+} from "lucide-react"
+import { pwaManager } from "@/lib/utils/pwa-manager"
 
-export default function PWAStatus() {
-  const [isOnline, setIsOnline] = useState(navigator.onLine)
-  const [isInstalled, setIsInstalled] = useState(false)
-  const [capabilities, setCapabilities] = useState<any>({})
-  const [batteryInfo, setBatteryInfo] = useState<any>(null)
-  const [networkInfo, setNetworkInfo] = useState<any>(null)
-  const [storageInfo, setStorageInfo] = useState<any>(null)
+function PWAStatus() {
+  const [installStatus, setInstallStatus] = useState({
+    isInstalled: false,
+    isStandalone: false,
+    canInstall: false,
+  })
 
-  const pwaManager = PWAManager.getInstance()
-  const deviceIntegration = DeviceIntegration.getInstance()
+  const [serviceWorkerStatus, setServiceWorkerStatus] = useState({
+    isRegistered: false,
+    isActive: false,
+    version: null as string | null,
+  })
+
+  const [isOnline, setIsOnline] = useState(true)
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default")
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null)
 
   useEffect(() => {
-    initializePWAStatus()
-    setupEventListeners()
-  }, [])
+    // Initialize PWA status
+    updateStatus()
 
-  const initializePWAStatus = async () => {
-    // Check if app is installed
-    setIsInstalled(pwaManager.isInstalled())
-
-    // Get device capabilities
-    setCapabilities(deviceIntegration.getDeviceCapabilities())
-
-    // Get battery info
-    const battery = await deviceIntegration.getBatteryInfo()
-    setBatteryInfo(battery)
-
-    // Get network info
-    setNetworkInfo(deviceIntegration.getNetworkInfo())
-
-    // Get storage info
-    const storage = await pwaManager.getStorageEstimate()
-    setStorageInfo(storage)
-  }
-
-  const setupEventListeners = () => {
+    // Listen for online/offline events
     const handleOnline = () => setIsOnline(true)
     const handleOffline = () => setIsOnline(false)
 
     window.addEventListener("online", handleOnline)
     window.addEventListener("offline", handleOffline)
 
+    // Listen for install prompt
+    const handleInstallPrompt = (e: any) => {
+      setDeferredPrompt(e.detail)
+      updateStatus()
+    }
+
+    const handleInstalled = () => {
+      setDeferredPrompt(null)
+      updateStatus()
+    }
+
+    window.addEventListener("pwa-install-available", handleInstallPrompt)
+    window.addEventListener("pwa-installed", handleInstalled)
+
+    // Check notification permission
+    if ("Notification" in window) {
+      setNotificationPermission(Notification.permission)
+    }
+
     return () => {
       window.removeEventListener("online", handleOnline)
       window.removeEventListener("offline", handleOffline)
+      window.removeEventListener("pwa-install-available", handleInstallPrompt)
+      window.removeEventListener("pwa-installed", handleInstalled)
+    }
+  }, [])
+
+  const updateStatus = () => {
+    setInstallStatus(pwaManager.getInstallationStatus())
+    setServiceWorkerStatus(pwaManager.getServiceWorkerStatus())
+    setIsOnline(navigator.onLine)
+  }
+
+  const handleInstall = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt()
+      const { outcome } = await deferredPrompt.userChoice
+      console.log("Install prompt outcome:", outcome)
+      setDeferredPrompt(null)
     }
   }
 
-  const handleTestCamera = async () => {
-    const photo = await deviceIntegration.capturePhoto()
-    if (photo) {
-      alert("Camera test successful!")
-    } else {
-      alert("Camera test failed")
+  const handleNotificationTest = async () => {
+    try {
+      if (notificationPermission === "default") {
+        const permission = await Notification.requestPermission()
+        setNotificationPermission(permission)
+      }
+
+      if (notificationPermission === "granted") {
+        await pwaManager.showNotification("Test Notification", {
+          body: "This is a test notification from Life OS!",
+          tag: "test-notification",
+        })
+      }
+    } catch (error) {
+      console.error("Failed to show test notification:", error)
     }
   }
 
-  const handleTestLocation = async () => {
-    const location = await deviceIntegration.getCurrentLocation()
-    if (location) {
-      alert(`Location: ${location.coords.latitude}, ${location.coords.longitude}`)
-    } else {
-      alert("Location test failed")
+  const handleCheckUpdates = async () => {
+    try {
+      await pwaManager.checkForUpdates()
+      updateStatus()
+    } catch (error) {
+      console.error("Failed to check for updates:", error)
     }
   }
 
-  const handleTestShare = async () => {
-    const success = await deviceIntegration.shareContent({
-      title: "Life OS",
-      text: "Check out my personal growth progress!",
-      url: window.location.href,
-    })
-
-    if (success) {
-      alert("Share test successful!")
-    } else {
-      alert("Share test failed")
+  const handleClearCache = async () => {
+    try {
+      await pwaManager.clearCache()
+      window.location.reload()
+    } catch (error) {
+      console.error("Failed to clear cache:", error)
     }
   }
 
-  const handleTestVibration = () => {
-    const success = deviceIntegration.vibrate([100, 50, 100])
-    if (success) {
-      alert("Vibration test successful!")
-    } else {
-      alert("Vibration not supported")
-    }
+  const getStatusIcon = (status: boolean) => {
+    return status ? <CheckCircle className="h-4 w-4 text-green-500" /> : <XCircle className="h-4 w-4 text-red-500" />
   }
 
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return "0 Bytes"
-    const k = 1024
-    const sizes = ["Bytes", "KB", "MB", "GB"]
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
+  const getStatusBadge = (status: boolean, trueText: string, falseText: string) => {
+    return <Badge variant={status ? "default" : "secondary"}>{status ? trueText : falseText}</Badge>
   }
 
   return (
-    <div className="space-y-6">
-      {/* Connection Status */}
-      <Card className="bg-black/20 backdrop-blur-xl border-white/10">
-        <CardContent className="p-6">
-          <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
-            {isOnline ? (
-              <Wifi className="w-5 h-5 mr-2 text-green-400" />
+    <Card className="w-full max-w-2xl">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Smartphone className="h-5 w-5" />
+          PWA Status Dashboard
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* Installation Status */}
+        <div className="space-y-3">
+          <h3 className="font-semibold flex items-center gap-2">
+            <Download className="h-4 w-4" />
+            Installation Status
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <span className="text-sm">Installed</span>
+              <div className="flex items-center gap-2">
+                {getStatusIcon(installStatus.isInstalled)}
+                {getStatusBadge(installStatus.isInstalled, "Yes", "No")}
+              </div>
+            </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <span className="text-sm">Standalone</span>
+              <div className="flex items-center gap-2">
+                {getStatusIcon(installStatus.isStandalone)}
+                {getStatusBadge(installStatus.isStandalone, "Yes", "No")}
+              </div>
+            </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <span className="text-sm">Can Install</span>
+              <div className="flex items-center gap-2">
+                {getStatusIcon(installStatus.canInstall)}
+                {getStatusBadge(installStatus.canInstall, "Yes", "No")}
+              </div>
+            </div>
+          </div>
+          {deferredPrompt && (
+            <Button onClick={handleInstall} className="w-full">
+              <Download className="h-4 w-4 mr-2" />
+              Install Life OS
+            </Button>
+          )}
+        </div>
+
+        <Separator />
+
+        {/* Service Worker Status */}
+        <div className="space-y-3">
+          <h3 className="font-semibold flex items-center gap-2">
+            <RefreshCw className="h-4 w-4" />
+            Service Worker Status
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <span className="text-sm">Registered</span>
+              <div className="flex items-center gap-2">
+                {getStatusIcon(serviceWorkerStatus.isRegistered)}
+                {getStatusBadge(serviceWorkerStatus.isRegistered, "Yes", "No")}
+              </div>
+            </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <span className="text-sm">Active</span>
+              <div className="flex items-center gap-2">
+                {getStatusIcon(serviceWorkerStatus.isActive)}
+                {getStatusBadge(serviceWorkerStatus.isActive, "Yes", "No")}
+              </div>
+            </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <span className="text-sm">Version</span>
+              <Badge variant="outline">{serviceWorkerStatus.version || "Unknown"}</Badge>
+            </div>
+          </div>
+        </div>
+
+        <Separator />
+
+        {/* Network & Notifications */}
+        <div className="space-y-3">
+          <h3 className="font-semibold flex items-center gap-2">
+            <Bell className="h-4 w-4" />
+            Features Status
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <span className="text-sm flex items-center gap-2">
+                {isOnline ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
+                Network
+              </span>
+              {getStatusBadge(isOnline, "Online", "Offline")}
+            </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <span className="text-sm flex items-center gap-2">
+                <Bell className="h-4 w-4" />
+                Notifications
+              </span>
+              <Badge variant={notificationPermission === "granted" ? "default" : "secondary"}>
+                {notificationPermission}
+              </Badge>
+            </div>
+          </div>
+        </div>
+
+        <Separator />
+
+        {/* Actions */}
+        <div className="space-y-3">
+          <h3 className="font-semibold">Actions</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <Button onClick={handleNotificationTest} variant="outline" size="sm">
+              <Bell className="h-4 w-4 mr-2" />
+              Test Notification
+            </Button>
+            <Button onClick={handleCheckUpdates} variant="outline" size="sm">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Check Updates
+            </Button>
+            <Button onClick={handleClearCache} variant="outline" size="sm">
+              <Trash2 className="h-4 w-4 mr-2" />
+              Clear Cache
+            </Button>
+          </div>
+        </div>
+
+        {/* Status Summary */}
+        <div className="p-4 bg-muted rounded-lg">
+          <div className="flex items-center gap-2 mb-2">
+            {serviceWorkerStatus.isActive && isOnline ? (
+              <CheckCircle className="h-5 w-5 text-green-500" />
             ) : (
-              <WifiOff className="w-5 h-5 mr-2 text-red-400" />
+              <AlertCircle className="h-5 w-5 text-yellow-500" />
             )}
-            Connection Status
-          </h3>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-300">Status</span>
-                <Badge variant={isOnline ? "default" : "destructive"}>{isOnline ? "Online" : "Offline"}</Badge>
-              </div>
-
-              {networkInfo && (
-                <>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-300">Connection Type</span>
-                    <span className="text-white">{networkInfo.effectiveType || "Unknown"}</span>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-300">Downlink</span>
-                    <span className="text-white">{networkInfo.downlink || "Unknown"} Mbps</span>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-300">App Status</span>
-                <Badge variant={isInstalled ? "default" : "secondary"}>{isInstalled ? "Installed" : "Browser"}</Badge>
-              </div>
-
-              {batteryInfo && (
-                <>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-300">Battery</span>
-                    <div className="flex items-center">
-                      <Battery className="w-4 h-4 mr-1 text-gray-400" />
-                      <span className="text-white">{Math.round(batteryInfo.level * 100)}%</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-300">Charging</span>
-                    <span className="text-white">{batteryInfo.charging ? "Yes" : "No"}</span>
-                  </div>
-                </>
-              )}
-            </div>
+            <span className="font-medium">
+              {serviceWorkerStatus.isActive && isOnline ? "PWA is fully functional" : "PWA has limited functionality"}
+            </span>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Device Capabilities */}
-      <Card className="bg-black/20 backdrop-blur-xl border-white/10">
-        <CardContent className="p-6">
-          <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
-            <Smartphone className="w-5 h-5 mr-2" />
-            Device Capabilities
-          </h3>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="text-center">
-              <Camera className={`w-8 h-8 mx-auto mb-2 ${capabilities.camera ? "text-green-400" : "text-gray-600"}`} />
-              <p className="text-sm text-gray-300">Camera</p>
-              <Badge variant={capabilities.camera ? "default" : "secondary"} className="mt-1">
-                {capabilities.camera ? "Available" : "Not Available"}
-              </Badge>
-              {capabilities.camera && (
-                <Button size="sm" variant="outline" onClick={handleTestCamera} className="mt-2 w-full bg-transparent">
-                  Test
-                </Button>
-              )}
-            </div>
-
-            <div className="text-center">
-              <MapPin
-                className={`w-8 h-8 mx-auto mb-2 ${capabilities.geolocation ? "text-green-400" : "text-gray-600"}`}
-              />
-              <p className="text-sm text-gray-300">Location</p>
-              <Badge variant={capabilities.geolocation ? "default" : "secondary"} className="mt-1">
-                {capabilities.geolocation ? "Available" : "Not Available"}
-              </Badge>
-              {capabilities.geolocation && (
-                <Button size="sm" variant="outline" onClick={handleTestLocation} className="mt-2 w-full bg-transparent">
-                  Test
-                </Button>
-              )}
-            </div>
-
-            <div className="text-center">
-              <Bell className={`w-8 h-8 mx-auto mb-2 ${capabilities.vibration ? "text-green-400" : "text-gray-600"}`} />
-              <p className="text-sm text-gray-300">Vibration</p>
-              <Badge variant={capabilities.vibration ? "default" : "secondary"} className="mt-1">
-                {capabilities.vibration ? "Available" : "Not Available"}
-              </Badge>
-              {capabilities.vibration && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleTestVibration}
-                  className="mt-2 w-full bg-transparent"
-                >
-                  Test
-                </Button>
-              )}
-            </div>
-
-            <div className="text-center">
-              <Share2 className={`w-8 h-8 mx-auto mb-2 ${capabilities.share ? "text-green-400" : "text-gray-600"}`} />
-              <p className="text-sm text-gray-300">Share</p>
-              <Badge variant={capabilities.share ? "default" : "secondary"} className="mt-1">
-                {capabilities.share ? "Available" : "Not Available"}
-              </Badge>
-              {capabilities.share && (
-                <Button size="sm" variant="outline" onClick={handleTestShare} className="mt-2 w-full bg-transparent">
-                  Test
-                </Button>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Storage Information */}
-      {storageInfo && (
-        <Card className="bg-black/20 backdrop-blur-xl border-white/10">
-          <CardContent className="p-6">
-            <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
-              <HardDrive className="w-5 h-5 mr-2" />
-              Storage Information
-            </h3>
-
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-300">Used Storage</span>
-                <span className="text-white">{formatBytes(storageInfo.usage || 0)}</span>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-gray-300">Available Storage</span>
-                <span className="text-white">{formatBytes(storageInfo.quota || 0)}</span>
-              </div>
-
-              <div className="w-full bg-gray-700 rounded-full h-2">
-                <div
-                  className="bg-purple-600 h-2 rounded-full transition-all duration-300"
-                  style={{
-                    width: `${storageInfo.quota ? (storageInfo.usage / storageInfo.quota) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-
-              <p className="text-xs text-gray-400">
-                {storageInfo.quota
-                  ? `${((storageInfo.usage / storageInfo.quota) * 100).toFixed(1)}% used`
-                  : "Storage info unavailable"}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* PWA Actions */}
-      <Card className="bg-black/20 backdrop-blur-xl border-white/10">
-        <CardContent className="p-6">
-          <h3 className="text-lg font-semibold text-white mb-4">PWA Actions</h3>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Button
-              onClick={() => pwaManager.triggerBackgroundSync()}
-              className="bg-purple-600 hover:bg-purple-700 text-white"
-            >
-              Sync Data
-            </Button>
-
-            <Button
-              onClick={() => pwaManager.requestPersistentStorage()}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white"
-            >
-              Request Persistent Storage
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+          <p className="text-sm text-muted-foreground">
+            {installStatus.isInstalled
+              ? "App is installed and running in standalone mode"
+              : "App is running in browser mode"}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
+
+export { PWAStatus }
+export default PWAStatus

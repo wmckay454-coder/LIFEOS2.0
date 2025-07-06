@@ -1,21 +1,7 @@
-export interface ScheduledNotification {
-  id: string
-  title: string
-  body: string
-  scheduledTime: number
-  icon?: string
-  badge?: string
-  tag?: string
-  data?: any
-}
-
 export class PWAManager {
   private static instance: PWAManager
-  private isInitialized = false
   private registration: ServiceWorkerRegistration | null = null
-  private scheduledNotifications = new Map<string, number>()
-
-  private constructor() {}
+  private isInitialized = false
 
   static getInstance(): PWAManager {
     if (!PWAManager.instance) {
@@ -28,16 +14,23 @@ export class PWAManager {
     if (this.isInitialized) return
 
     try {
-      // Register service worker
+      console.log("🔧 Initializing PWA Manager...")
+
+      // Check if service workers are supported
+      if (!("serviceWorker" in navigator)) {
+        console.warn("⚠️ Service Workers not supported")
+        return
+      }
+
+      // Unregister any existing service workers first
+      await this.unregisterExistingWorkers()
+
+      // Register new service worker
       await this.registerServiceWorker()
 
-      // Request notification permission
-      await this.requestNotificationPermission()
-
-      // Initialize push notifications if supported
-      if (this.registration && "pushManager" in this.registration) {
-        await this.initializePushNotifications()
-      }
+      // Initialize other PWA features
+      await this.initializeNotifications()
+      await this.initializeInstallPrompt()
 
       this.isInitialized = true
       console.log("✅ PWA Manager initialized successfully")
@@ -47,177 +40,163 @@ export class PWAManager {
     }
   }
 
-  private async registerServiceWorker(): Promise<void> {
-    if (!("serviceWorker" in navigator)) {
-      throw new Error("Service Worker not supported")
-    }
-
+  private async unregisterExistingWorkers(): Promise<void> {
     try {
+      const registrations = await navigator.serviceWorker.getRegistrations()
+      for (const registration of registrations) {
+        console.log("🗑️ Unregistering existing service worker")
+        await registration.unregister()
+      }
+    } catch (error) {
+      console.warn("⚠️ Failed to unregister existing workers:", error)
+    }
+  }
+
+  private async registerServiceWorker(): Promise<void> {
+    try {
+      console.log("📝 Registering service worker...")
+
       this.registration = await navigator.serviceWorker.register("/sw.js", {
         scope: "/",
+        updateViaCache: "none",
       })
 
-      console.log("✅ Service Worker registered:", this.registration.scope)
+      console.log("✅ Service Worker registered successfully")
 
-      // Listen for service worker updates
+      // Handle updates
       this.registration.addEventListener("updatefound", () => {
         console.log("🔄 Service Worker update found")
+        const newWorker = this.registration?.installing
+        if (newWorker) {
+          newWorker.addEventListener("statechange", () => {
+            if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+              console.log("🆕 New Service Worker available")
+              // Optionally notify user about update
+            }
+          })
+        }
       })
+
+      // Wait for service worker to be ready
+      await navigator.serviceWorker.ready
+      console.log("🚀 Service Worker is ready")
     } catch (error) {
       console.error("❌ Service Worker registration failed:", error)
       throw error
     }
   }
 
-  async requestNotificationPermission(): Promise<NotificationPermission> {
-    if (!("Notification" in window)) {
-      console.warn("Notifications not supported")
-      return "denied"
-    }
-
-    if (Notification.permission === "granted") {
-      return "granted"
-    }
-
-    if (Notification.permission === "denied") {
-      return "denied"
-    }
-
-    const permission = await Notification.requestPermission()
-    console.log("📱 Notification permission:", permission)
-    return permission
-  }
-
-  private async initializePushNotifications(): Promise<void> {
-    if (!this.registration || !("pushManager" in this.registration)) {
-      return
-    }
-
+  private async initializeNotifications(): Promise<void> {
     try {
-      // Check if already subscribed
-      const existingSubscription = await this.registration.pushManager.getSubscription()
+      if (!("Notification" in window)) {
+        console.warn("⚠️ Notifications not supported")
+        return
+      }
 
-      if (!existingSubscription) {
-        // Create new subscription (in a real app, you'd send this to your server)
-        const subscription = await this.registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: this.urlBase64ToUint8Array(
-            // This is a dummy VAPID key - replace with your actual key
-            "BEl62iUYgUivxIkv69yViEuiBIa40HI80NM9LdNnC_AAAHH9Ynzjx0SwHSuSxaXdwR_BHSxVlF5_P8xgkcq9eS",
-          ),
-        })
-
-        console.log("✅ Push subscription created")
+      if (Notification.permission === "default") {
+        console.log("🔔 Requesting notification permission...")
+        const permission = await Notification.requestPermission()
+        console.log("🔔 Notification permission:", permission)
       }
     } catch (error) {
-      console.warn("Push notifications setup failed:", error)
+      console.warn("⚠️ Failed to initialize notifications:", error)
     }
   }
 
-  private urlBase64ToUint8Array(base64String: string): Uint8Array {
-    const padding = "=".repeat((4 - (base64String.length % 4)) % 4)
-    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/")
+  private async initializeInstallPrompt(): Promise<void> {
+    try {
+      let deferredPrompt: any = null
 
-    const rawData = window.atob(base64)
-    const outputArray = new Uint8Array(rawData.length)
+      window.addEventListener("beforeinstallprompt", (e) => {
+        console.log("📱 Install prompt available")
+        e.preventDefault()
+        deferredPrompt = e
 
-    for (let i = 0; i < rawData.length; ++i) {
-      outputArray[i] = rawData.charCodeAt(i)
+        // Dispatch custom event for UI components
+        window.dispatchEvent(new CustomEvent("pwa-install-available", { detail: deferredPrompt }))
+      })
+
+      window.addEventListener("appinstalled", () => {
+        console.log("✅ PWA installed successfully")
+        deferredPrompt = null
+        window.dispatchEvent(new CustomEvent("pwa-installed"))
+      })
+    } catch (error) {
+      console.warn("⚠️ Failed to initialize install prompt:", error)
     }
-    return outputArray
   }
 
-  async scheduleNotification(notification: ScheduledNotification): Promise<boolean> {
-    const permission = await this.requestNotificationPermission()
-
-    if (permission !== "granted") {
-      console.warn("❌ Notification permission denied")
-      return false
+  async showNotification(title: string, options: NotificationOptions = {}): Promise<void> {
+    if (!this.registration) {
+      throw new Error("Service Worker not registered")
     }
 
-    const now = Date.now()
-    const delay = notification.scheduledTime - now
-
-    if (delay <= 0) {
-      // Show immediately if time has passed
-      this.showNotification(notification)
-      return true
+    if (Notification.permission !== "granted") {
+      throw new Error("Notification permission not granted")
     }
 
-    // Schedule the notification
-    const timeoutId = window.setTimeout(() => {
-      this.showNotification(notification)
-      this.scheduledNotifications.delete(notification.id)
+    const defaultOptions: NotificationOptions = {
+      icon: "/icon-192x192.png",
+      badge: "/icon-192x192.png",
+      tag: "life-os-notification",
+      requireInteraction: false,
+      ...options,
+    }
+
+    await this.registration.showNotification(title, defaultOptions)
+  }
+
+  async scheduleNotification(title: string, options: NotificationOptions, delay: number): Promise<void> {
+    setTimeout(async () => {
+      try {
+        await this.showNotification(title, options)
+      } catch (error) {
+        console.error("❌ Failed to show scheduled notification:", error)
+      }
     }, delay)
-
-    this.scheduledNotifications.set(notification.id, timeoutId)
-
-    console.log(`📅 Notification scheduled for ${new Date(notification.scheduledTime).toLocaleString()}`)
-    return true
   }
 
-  private showNotification(notification: ScheduledNotification): void {
+  getInstallationStatus(): {
+    isInstalled: boolean
+    isStandalone: boolean
+    canInstall: boolean
+  } {
+    const isStandalone =
+      window.matchMedia("(display-mode: standalone)").matches || (window.navigator as any).standalone === true
+
+    return {
+      isInstalled: isStandalone,
+      isStandalone,
+      canInstall: !isStandalone && "serviceWorker" in navigator,
+    }
+  }
+
+  getServiceWorkerStatus(): {
+    isRegistered: boolean
+    isActive: boolean
+    version: string | null
+  } {
+    return {
+      isRegistered: !!this.registration,
+      isActive: !!this.registration?.active,
+      version: this.registration?.active?.scriptURL.includes("v1.7.0") ? "1.7.0" : null,
+    }
+  }
+
+  async checkForUpdates(): Promise<void> {
     if (this.registration) {
-      // Use service worker to show notification
-      this.registration.showNotification(notification.title, {
-        body: notification.body,
-        icon: notification.icon || "/icon-192x192.png",
-        badge: notification.badge || "/icon-192x192.png",
-        tag: notification.tag,
-        data: notification.data,
-        requireInteraction: false,
-        actions: [
-          {
-            action: "view",
-            title: "View",
-            icon: "/icon-192x192.png",
-          },
-          {
-            action: "dismiss",
-            title: "Dismiss",
-            icon: "/icon-192x192.png",
-          },
-        ],
-      })
-    } else {
-      // Fallback to regular notification
-      new Notification(notification.title, {
-        body: notification.body,
-        icon: notification.icon || "/icon-192x192.png",
-        tag: notification.tag,
-        data: notification.data,
-      })
+      await this.registration.update()
     }
   }
 
-  cancelScheduledNotification(id: string): boolean {
-    const timeoutId = this.scheduledNotifications.get(id)
-    if (timeoutId) {
-      clearTimeout(timeoutId)
-      this.scheduledNotifications.delete(id)
-      console.log(`❌ Cancelled scheduled notification: ${id}`)
-      return true
+  async clearCache(): Promise<void> {
+    if ("caches" in window) {
+      const cacheNames = await caches.keys()
+      await Promise.all(cacheNames.map((name) => caches.delete(name)))
+      console.log("🗑️ All caches cleared")
     }
-    return false
-  }
-
-  getScheduledNotifications(): string[] {
-    return Array.from(this.scheduledNotifications.keys())
-  }
-
-  isNotificationSupported(): boolean {
-    return "Notification" in window
-  }
-
-  getNotificationPermission(): NotificationPermission {
-    return Notification.permission
-  }
-
-  isServiceWorkerSupported(): boolean {
-    return "serviceWorker" in navigator
-  }
-
-  getRegistration(): ServiceWorkerRegistration | null {
-    return this.registration
   }
 }
+
+export const pwaManager = PWAManager.getInstance()
+export default PWAManager
