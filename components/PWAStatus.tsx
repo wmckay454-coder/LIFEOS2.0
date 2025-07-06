@@ -1,405 +1,495 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Progress } from "@/components/ui/progress"
+import PWAManager from "@/lib/utils/pwa-manager"
+import { notificationScheduler } from "@/lib/utils/notification-scheduler"
+import { googleCalendar } from "@/lib/utils/google-calendar"
+import { offlineSyncManager } from "@/lib/utils/offline-sync"
 import {
   Smartphone,
-  Download,
-  Bell,
   Wifi,
   WifiOff,
+  Bell,
+  Download,
   RefreshCw,
-  Trash2,
   CheckCircle,
   XCircle,
-  AlertCircle,
-  Send,
+  AlertTriangle,
+  Calendar,
+  FolderSyncIcon as Sync,
+  Database,
+  Clock,
   Settings,
 } from "lucide-react"
-import { pwaManager } from "@/lib/utils/pwa-manager"
 
-function PWAStatus() {
-  const [installStatus, setInstallStatus] = useState({
+interface PWAStatusInfo {
+  isInstalled: boolean
+  isStandalone: boolean
+  canInstall: boolean
+  serviceWorkerRegistered: boolean
+  serviceWorkerActive: boolean
+  notificationPermission: NotificationPermission
+  isOnline: boolean
+  cacheStatus: {
+    used: number
+    total: number
+    percentage: number
+  }
+  scheduledNotifications: number
+  calendarConnected: boolean
+  syncPending: boolean
+}
+
+export default function PWAStatus() {
+  const [status, setStatus] = useState<PWAStatusInfo>({
     isInstalled: false,
     isStandalone: false,
     canInstall: false,
+    serviceWorkerRegistered: false,
+    serviceWorkerActive: false,
+    notificationPermission: "default",
+    isOnline: navigator.onLine,
+    cacheStatus: { used: 0, total: 0, percentage: 0 },
+    scheduledNotifications: 0,
+    calendarConnected: false,
+    syncPending: false,
   })
 
-  const [serviceWorkerStatus, setServiceWorkerStatus] = useState({
-    isRegistered: false,
-    isActive: false,
-    version: null as string | null,
-  })
-
-  const [isOnline, setIsOnline] = useState(true)
-  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default")
   const [isLoading, setIsLoading] = useState(false)
-  const [testNotificationData, setTestNotificationData] = useState({
-    title: "Test Notification",
-    body: "This is a test notification from Life OS!",
-    useAPI: false,
-  })
+  const [message, setMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null)
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+
+  const pwaManager = PWAManager.getInstance()
 
   useEffect(() => {
     updateStatus()
 
-    // Listen for online/offline events
-    const handleOnline = () => setIsOnline(true)
-    const handleOffline = () => setIsOnline(false)
+    const interval = setInterval(updateStatus, 30000) // Update every 30 seconds
+
+    // Listen for network changes
+    const handleOnline = () => updateStatus()
+    const handleOffline = () => updateStatus()
 
     window.addEventListener("online", handleOnline)
     window.addEventListener("offline", handleOffline)
 
     // Listen for PWA events
-    const handleInstallAvailable = () => updateStatus()
-    const handleInstalled = () => updateStatus()
-
-    window.addEventListener("pwa-install-available", handleInstallAvailable)
-    window.addEventListener("pwa-installed", handleInstalled)
-
-    // Check notification permission
-    if ("Notification" in window) {
-      setNotificationPermission(Notification.permission)
-    }
+    window.addEventListener("pwa-install-available", updateStatus)
+    window.addEventListener("pwa-installed", updateStatus)
 
     return () => {
+      clearInterval(interval)
       window.removeEventListener("online", handleOnline)
       window.removeEventListener("offline", handleOffline)
-      window.removeEventListener("pwa-install-available", handleInstallAvailable)
-      window.removeEventListener("pwa-installed", handleInstalled)
+      window.removeEventListener("pwa-install-available", updateStatus)
+      window.removeEventListener("pwa-installed", updateStatus)
     }
   }, [])
 
-  const updateStatus = () => {
-    setInstallStatus(pwaManager.getInstallationStatus())
-    setServiceWorkerStatus(pwaManager.getServiceWorkerStatus())
-    setIsOnline(navigator.onLine)
+  const updateStatus = async () => {
+    try {
+      const installationStatus = pwaManager.getInstallationStatus()
+      const serviceWorkerStatus = pwaManager.getServiceWorkerStatus()
+
+      // Get scheduled notifications count
+      let scheduledCount = 0
+      try {
+        const notifications = await notificationScheduler.getScheduledNotifications()
+        scheduledCount = notifications.length
+      } catch (error) {
+        console.warn("Failed to get scheduled notifications count:", error)
+      }
+
+      // Check calendar connection
+      let calendarConnected = false
+      try {
+        await googleCalendar.initialize()
+        calendarConnected = googleCalendar.isSignedInStatus()
+      } catch (error) {
+        console.warn("Failed to check calendar status:", error)
+      }
+
+      // Estimate cache usage (simplified)
+      const cacheStatus = await estimateCacheUsage()
+
+      setStatus({
+        isInstalled: installationStatus.isInstalled,
+        isStandalone: installationStatus.isStandalone,
+        canInstall: installationStatus.canInstall,
+        serviceWorkerRegistered: serviceWorkerStatus.isRegistered,
+        serviceWorkerActive: serviceWorkerStatus.isActive,
+        notificationPermission: Notification.permission,
+        isOnline: navigator.onLine,
+        cacheStatus,
+        scheduledNotifications: scheduledCount,
+        calendarConnected,
+        syncPending: !offlineSyncManager.isOnline() && offlineSyncManager.isSyncInProgress(),
+      })
+
+      setLastUpdate(new Date())
+    } catch (error) {
+      console.error("Failed to update PWA status:", error)
+    }
   }
 
-  const handleInstall = async () => {
+  const estimateCacheUsage = async (): Promise<{ used: number; total: number; percentage: number }> => {
+    try {
+      if ("storage" in navigator && "estimate" in navigator.storage) {
+        const estimate = await navigator.storage.estimate()
+        const used = estimate.usage || 0
+        const total = estimate.quota || 0
+        const percentage = total > 0 ? (used / total) * 100 : 0
+
+        return { used, total, percentage }
+      }
+    } catch (error) {
+      console.warn("Failed to estimate storage:", error)
+    }
+
+    return { used: 0, total: 0, percentage: 0 }
+  }
+
+  const installPWA = async () => {
     setIsLoading(true)
     try {
       const success = await pwaManager.showInstallPrompt()
       if (success) {
-        console.log("PWA installation initiated")
-        updateStatus()
+        setMessage({ type: "success", text: "PWA installation started" })
+      } else {
+        setMessage({ type: "info", text: "Install prompt not available" })
       }
     } catch (error) {
-      console.error("Failed to install PWA:", error)
+      setMessage({ type: "error", text: "Failed to show install prompt" })
     } finally {
       setIsLoading(false)
     }
   }
 
-  const handleRequestNotificationPermission = async () => {
+  const requestNotificationPermission = async () => {
     setIsLoading(true)
     try {
       const permission = await pwaManager.requestNotificationPermission()
-      setNotificationPermission(permission)
+      if (permission === "granted") {
+        setMessage({ type: "success", text: "Notification permission granted" })
+      } else {
+        setMessage({ type: "error", text: "Notification permission denied" })
+      }
+      await updateStatus()
     } catch (error) {
-      console.error("Failed to request notification permission:", error)
+      setMessage({ type: "error", text: "Failed to request notification permission" })
     } finally {
       setIsLoading(false)
     }
   }
 
-  const handleTestNotification = async () => {
+  const testNotification = async () => {
     setIsLoading(true)
     try {
-      let success = false
-
-      if (testNotificationData.useAPI) {
-        // Test via API endpoint
-        success = await pwaManager.testNotificationViaAPI({
-          title: testNotificationData.title,
-          body: testNotificationData.body,
-          icon: "/icon-192x192.png",
-          data: { test: true, timestamp: Date.now() },
-        })
-      } else {
-        // Test via postMessage to service worker
-        success = await pwaManager.testNotification(testNotificationData.title, testNotificationData.body)
-      }
-
-      if (success) {
-        console.log("Test notification sent successfully")
-      } else {
-        console.error("Test notification failed")
-      }
+      await notificationScheduler.scheduleReminder(
+        "PWA Test Notification",
+        "This is a test notification from Life OS PWA!",
+        0.1, // 6 seconds
+      )
+      setMessage({ type: "success", text: "Test notification scheduled" })
     } catch (error) {
-      console.error("Failed to send test notification:", error)
+      setMessage({ type: "error", text: "Failed to send test notification" })
     } finally {
       setIsLoading(false)
     }
   }
 
-  const handleCheckUpdates = async () => {
-    setIsLoading(true)
-    try {
-      await pwaManager.checkForUpdates()
-      updateStatus()
-    } catch (error) {
-      console.error("Failed to check for updates:", error)
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const handleClearCache = async () => {
+  const clearCache = async () => {
     setIsLoading(true)
     try {
       await pwaManager.clearCache()
-      window.location.reload()
+      setMessage({ type: "success", text: "Cache cleared successfully" })
+      await updateStatus()
     } catch (error) {
-      console.error("Failed to clear cache:", error)
+      setMessage({ type: "error", text: "Failed to clear cache" })
     } finally {
       setIsLoading(false)
     }
   }
 
-  const getStatusIcon = (status: boolean) => {
-    return status ? <CheckCircle className="h-4 w-4 text-green-500" /> : <XCircle className="h-4 w-4 text-red-500" />
+  const checkForUpdates = async () => {
+    setIsLoading(true)
+    try {
+      await pwaManager.checkForUpdates()
+      setMessage({ type: "info", text: "Checked for updates" })
+    } catch (error) {
+      setMessage({ type: "error", text: "Failed to check for updates" })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
-  const getStatusBadge = (status: boolean, trueText: string, falseText: string) => {
-    return <Badge variant={status ? "default" : "secondary"}>{status ? trueText : falseText}</Badge>
+  const triggerSync = async () => {
+    setIsLoading(true)
+    try {
+      await offlineSyncManager.triggerSync()
+      setMessage({ type: "success", text: "Sync completed" })
+      await updateStatus()
+    } catch (error) {
+      setMessage({ type: "error", text: "Sync failed" })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
-  const getPermissionBadge = (permission: NotificationPermission) => {
-    const variants = {
-      granted: "default",
-      denied: "destructive",
-      default: "secondary",
-    } as const
+  const formatBytes = (bytes: number): string => {
+    if (bytes === 0) return "0 Bytes"
+    const k = 1024
+    const sizes = ["Bytes", "KB", "MB", "GB"]
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
+  }
 
-    return <Badge variant={variants[permission]}>{permission}</Badge>
+  const getStatusIcon = (condition: boolean) => {
+    return condition ? <CheckCircle className="w-4 h-4 text-green-500" /> : <XCircle className="w-4 h-4 text-red-500" />
+  }
+
+  const getPermissionIcon = (permission: NotificationPermission) => {
+    switch (permission) {
+      case "granted":
+        return <CheckCircle className="w-4 h-4 text-green-500" />
+      case "denied":
+        return <XCircle className="w-4 h-4 text-red-500" />
+      default:
+        return <AlertTriangle className="w-4 h-4 text-yellow-500" />
+    }
   }
 
   return (
-    <Card className="w-full max-w-4xl mx-auto">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Smartphone className="h-5 w-5" />
-          PWA Status Dashboard
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        {/* Installation Status */}
-        <div className="space-y-3">
-          <h3 className="font-semibold flex items-center gap-2">
-            <Download className="h-4 w-4" />
-            Installation Status
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <span className="text-sm">Installed</span>
-              <div className="flex items-center gap-2">
-                {getStatusIcon(installStatus.isInstalled)}
-                {getStatusBadge(installStatus.isInstalled, "Yes", "No")}
-              </div>
+    <div className="space-y-6">
+      <Card className="bg-black/20 backdrop-blur-xl border-white/10 shadow-2xl">
+        <CardHeader>
+          <CardTitle className="text-white flex items-center justify-between">
+            <div className="flex items-center">
+              <Smartphone className="w-6 h-6 mr-3" />
+              PWA Status Dashboard
             </div>
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <span className="text-sm">Standalone</span>
-              <div className="flex items-center gap-2">
-                {getStatusIcon(installStatus.isStandalone)}
-                {getStatusBadge(installStatus.isStandalone, "Yes", "No")}
-              </div>
+            <div className="flex items-center space-x-2">
+              <Badge variant="secondary" className="bg-purple-500/20 text-purple-300">
+                v2.0.0
+              </Badge>
+              <Button
+                onClick={updateStatus}
+                size="sm"
+                variant="outline"
+                className="border-white/20 text-white hover:bg-white/10 bg-transparent"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </Button>
             </div>
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <span className="text-sm">Can Install</span>
-              <div className="flex items-center gap-2">
-                {getStatusIcon(installStatus.canInstall)}
-                {getStatusBadge(installStatus.canInstall, "Yes", "No")}
-              </div>
-            </div>
-          </div>
-          {installStatus.canInstall && (
-            <Button onClick={handleInstall} disabled={isLoading} className="w-full">
-              <Download className="h-4 w-4 mr-2" />
-              Install Life OS
-            </Button>
-          )}
-        </div>
-
-        <Separator />
-
-        {/* Service Worker Status */}
-        <div className="space-y-3">
-          <h3 className="font-semibold flex items-center gap-2">
-            <Settings className="h-4 w-4" />
-            Service Worker Status
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <span className="text-sm">Registered</span>
-              <div className="flex items-center gap-2">
-                {getStatusIcon(serviceWorkerStatus.isRegistered)}
-                {getStatusBadge(serviceWorkerStatus.isRegistered, "Yes", "No")}
-              </div>
-            </div>
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <span className="text-sm">Active</span>
-              <div className="flex items-center gap-2">
-                {getStatusIcon(serviceWorkerStatus.isActive)}
-                {getStatusBadge(serviceWorkerStatus.isActive, "Yes", "No")}
-              </div>
-            </div>
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <span className="text-sm">Version</span>
-              <Badge variant="outline">{serviceWorkerStatus.version || "Unknown"}</Badge>
-            </div>
-          </div>
-        </div>
-
-        <Separator />
-
-        {/* Network & Notifications */}
-        <div className="space-y-3">
-          <h3 className="font-semibold flex items-center gap-2">
-            <Bell className="h-4 w-4" />
-            Features Status
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <span className="text-sm flex items-center gap-2">
-                {isOnline ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
-                Network
-              </span>
-              {getStatusBadge(isOnline, "Online", "Offline")}
-            </div>
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <span className="text-sm flex items-center gap-2">
-                <Bell className="h-4 w-4" />
-                Notifications
-              </span>
-              {getPermissionBadge(notificationPermission)}
-            </div>
-          </div>
-          {notificationPermission !== "granted" && (
-            <Button
-              onClick={handleRequestNotificationPermission}
-              disabled={isLoading}
-              variant="outline"
-              className="w-full bg-transparent"
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Message Alert */}
+          {message && (
+            <Alert
+              className={`border-${message.type === "success" ? "green" : message.type === "error" ? "red" : "blue"}-500/20 bg-${message.type === "success" ? "green" : message.type === "error" ? "red" : "blue"}-500/10`}
             >
-              <Bell className="h-4 w-4 mr-2" />
-              Request Notification Permission
-            </Button>
+              <AlertDescription
+                className={`text-${message.type === "success" ? "green" : message.type === "error" ? "red" : "blue"}-200`}
+              >
+                {message.text}
+              </AlertDescription>
+            </Alert>
           )}
-        </div>
 
-        <Separator />
-
-        {/* Test Notification Section */}
-        <div className="space-y-3">
-          <h3 className="font-semibold flex items-center gap-2">
-            <Send className="h-4 w-4" />
-            Test Notifications
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="notification-title">Title</Label>
-              <Input
-                id="notification-title"
-                value={testNotificationData.title}
-                onChange={(e) => setTestNotificationData((prev) => ({ ...prev, title: e.target.value }))}
-                placeholder="Notification title"
-              />
+          {/* Installation Status */}
+          <div className="space-y-3">
+            <h3 className="text-white font-semibold flex items-center">
+              <Download className="w-4 h-4 mr-2" />
+              Installation Status
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  {getStatusIcon(status.isInstalled)}
+                  <span className="text-white">PWA Installed</span>
+                </div>
+                {status.canInstall && !status.isInstalled && (
+                  <Button
+                    onClick={installPWA}
+                    disabled={isLoading}
+                    size="sm"
+                    className="bg-green-600 hover:bg-green-700"
+                  >
+                    Install
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  {getStatusIcon(status.isStandalone)}
+                  <span className="text-white">Standalone Mode</span>
+                </div>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="notification-body">Body</Label>
-              <Input
-                id="notification-body"
-                value={testNotificationData.body}
-                onChange={(e) => setTestNotificationData((prev) => ({ ...prev, body: e.target.value }))}
-                placeholder="Notification body"
-              />
+          </div>
+
+          {/* Network & Service Worker */}
+          <div className="space-y-3">
+            <h3 className="text-white font-semibold flex items-center">
+              <Settings className="w-4 h-4 mr-2" />
+              System Status
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  {status.isOnline ? (
+                    <Wifi className="w-4 h-4 text-green-500" />
+                  ) : (
+                    <WifiOff className="w-4 h-4 text-red-500" />
+                  )}
+                  <span className="text-white">{status.isOnline ? "Online" : "Offline"}</span>
+                </div>
+                {!status.isOnline && status.syncPending && (
+                  <Button
+                    onClick={triggerSync}
+                    disabled={isLoading}
+                    size="sm"
+                    variant="outline"
+                    className="border-white/20 text-white hover:bg-white/10 bg-transparent"
+                  >
+                    <Sync className="w-4 h-4 mr-1" />
+                    Sync
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  {getStatusIcon(status.serviceWorkerActive)}
+                  <span className="text-white">Service Worker</span>
+                </div>
+                <Button
+                  onClick={checkForUpdates}
+                  disabled={isLoading}
+                  size="sm"
+                  variant="outline"
+                  className="border-white/20 text-white hover:bg-white/10 bg-transparent"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </Button>
+              </div>
             </div>
           </div>
-          <div className="flex items-center space-x-2">
-            <input
-              type="checkbox"
-              id="use-api"
-              checked={testNotificationData.useAPI}
-              onChange={(e) => setTestNotificationData((prev) => ({ ...prev, useAPI: e.target.checked }))}
-              className="rounded"
-            />
-            <Label htmlFor="use-api" className="text-sm">
-              Test via API endpoint (simulates push notification)
-            </Label>
-          </div>
-          <Button
-            onClick={handleTestNotification}
-            disabled={isLoading || notificationPermission !== "granted"}
-            className="w-full"
-          >
-            <Send className="h-4 w-4 mr-2" />
-            {isLoading ? "Sending..." : "Send Test Notification"}
-          </Button>
-          {notificationPermission !== "granted" && (
-            <p className="text-sm text-muted-foreground">Notification permission required to test notifications</p>
-          )}
-        </div>
 
-        <Separator />
-
-        {/* Actions */}
-        <div className="space-y-3">
-          <h3 className="font-semibold">Management Actions</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Button
-              onClick={handleCheckUpdates}
-              disabled={isLoading}
-              variant="outline"
-              size="sm"
-              className="bg-transparent"
-            >
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Check for Updates
-            </Button>
-            <Button
-              onClick={handleClearCache}
-              disabled={isLoading}
-              variant="outline"
-              size="sm"
-              className="bg-transparent"
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Clear Cache & Reload
-            </Button>
+          {/* Notifications */}
+          <div className="space-y-3">
+            <h3 className="text-white font-semibold flex items-center">
+              <Bell className="w-4 h-4 mr-2" />
+              Notifications
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  {getPermissionIcon(status.notificationPermission)}
+                  <span className="text-white">Permission: {status.notificationPermission}</span>
+                </div>
+                {status.notificationPermission !== "granted" && (
+                  <Button
+                    onClick={requestNotificationPermission}
+                    disabled={isLoading}
+                    size="sm"
+                    className="bg-blue-600 hover:bg-blue-700"
+                  >
+                    Enable
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  <Clock className="w-4 h-4 text-purple-400" />
+                  <span className="text-white">Scheduled: {status.scheduledNotifications}</span>
+                </div>
+                {status.notificationPermission === "granted" && (
+                  <Button
+                    onClick={testNotification}
+                    disabled={isLoading}
+                    size="sm"
+                    variant="outline"
+                    className="border-white/20 text-white hover:bg-white/10 bg-transparent"
+                  >
+                    Test
+                  </Button>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
 
-        {/* Status Summary */}
-        <div className="p-4 bg-muted rounded-lg">
-          <div className="flex items-center gap-2 mb-2">
-            {serviceWorkerStatus.isActive && isOnline ? (
-              <CheckCircle className="h-5 w-5 text-green-500" />
-            ) : (
-              <AlertCircle className="h-5 w-5 text-yellow-500" />
-            )}
-            <span className="font-medium">
-              {serviceWorkerStatus.isActive && isOnline ? "PWA is fully functional" : "PWA has limited functionality"}
-            </span>
+          {/* Integrations */}
+          <div className="space-y-3">
+            <h3 className="text-white font-semibold flex items-center">
+              <Calendar className="w-4 h-4 mr-2" />
+              Integrations
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  {getStatusIcon(status.calendarConnected)}
+                  <span className="text-white">Google Calendar</span>
+                </div>
+                <Badge
+                  variant="secondary"
+                  className={`${status.calendarConnected ? "bg-green-500/20 text-green-300" : "bg-gray-500/20 text-gray-300"}`}
+                >
+                  {status.calendarConnected ? "Connected" : "Disconnected"}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  {getStatusIcon(!status.syncPending)}
+                  <span className="text-white">Background Sync</span>
+                </div>
+                <Badge
+                  variant="secondary"
+                  className={`${status.syncPending ? "bg-yellow-500/20 text-yellow-300" : "bg-green-500/20 text-green-300"}`}
+                >
+                  {status.syncPending ? "Pending" : "Up to date"}
+                </Badge>
+              </div>
+            </div>
           </div>
-          <p className="text-sm text-muted-foreground">
-            {installStatus.isInstalled
-              ? "App is installed and running in standalone mode"
-              : "App is running in browser mode"}
-          </p>
-          {notificationPermission === "granted" && (
-            <p className="text-sm text-green-600 mt-1">✓ Notifications are enabled and ready for testing</p>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+
+          {/* Storage */}
+          <div className="space-y-3">
+            <h3 className="text-white font-semibold flex items-center">
+              <Database className="w-4 h-4 mr-2" />
+              Storage Usage
+            </h3>
+            <div className="p-4 bg-white/5 rounded-lg space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-white">
+                  {formatBytes(status.cacheStatus.used)} / {formatBytes(status.cacheStatus.total)}
+                </span>
+                <span className="text-gray-400">{status.cacheStatus.percentage.toFixed(1)}%</span>
+              </div>
+              <Progress value={status.cacheStatus.percentage} className="w-full h-2 bg-white/10" />
+              <div className="flex justify-end">
+                <Button
+                  onClick={clearCache}
+                  disabled={isLoading}
+                  size="sm"
+                  variant="outline"
+                  className="border-white/20 text-white hover:bg-white/10 bg-transparent"
+                >
+                  Clear Cache
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Last Update */}
+          <div className="text-center text-gray-400 text-sm">Last updated: {lastUpdate.toLocaleTimeString()}</div>
+        </CardContent>
+      </Card>
+    </div>
   )
 }
-
-export { PWAStatus }
-export default PWAStatus

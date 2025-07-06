@@ -1,355 +1,344 @@
-import PWAManager from "./pwa-manager"
-import { safeAtob, safeBtoa, isProbablyBase64 } from "./safe-atob"
-import type { Stats, JournalEntry, Todo, CheckInData, Habit, Mission, Profile } from "@/lib/types"
-
-// Export constants for backward compatibility
-export const DATA_VERSION = "1.2.0"
-export const STORAGE_KEYS = {
-  USER_DATA: "life_os_user_data",
-  BACKUP_DATA: "life_os_backup_data",
-  SETTINGS: "life_os_settings",
-  VERSION: "life_os_version",
-} as const
-
-export interface UserData {
-  version: string
-  profile: Profile
-  stats: Stats
-  habits: Habit[]
-  journalEntries: JournalEntry[]
-  checkIns: CheckInData[]
-  todos: Todo[]
-  missions: Mission[]
-  settings: {
-    preferredCheckInTime: string
-    notificationsEnabled: boolean
-    backupEnabled: boolean
-    encryptionEnabled: boolean
-  }
-  lastModified: string
-  lastBackup?: string
+export interface DataEntry {
+  id: string
+  type: "journal" | "todo" | "habit" | "checkin" | "goal" | "note"
+  title: string
+  content: any
+  timestamp: number
+  tags?: string[]
+  metadata?: Record<string, any>
+  synced?: boolean
+  syncedAt?: number
 }
 
-class DataManagerClass {
-  private pwaManager: PWAManager
-  private isInitialized = false
+export interface SyncStatus {
+  lastSync: number
+  pendingItems: number
+  isOnline: boolean
+  isSyncing: boolean
+}
 
-  constructor() {
-    this.pwaManager = PWAManager.getInstance()
+export class DataManager {
+  private static instance: DataManager
+  private dbName = "LifeOSData"
+  private dbVersion = 1
+  private db: IDBDatabase | null = null
+
+  private constructor() {
+    this.initDB()
   }
 
-  async initialize(): Promise<void> {
-    if (this.isInitialized) return
-
-    try {
-      // Initialize PWA Manager first
-      await this.pwaManager.initialize()
-
-      // Run data migration if needed
-      await this.migrateData()
-
-      // Setup automatic backup
-      this.setupAutomaticBackup()
-
-      // Setup cleanup routine
-      this.setupCleanup()
-
-      this.isInitialized = true
-      console.log("✅ DataManager initialized successfully")
-    } catch (error) {
-      console.error("❌ DataManager initialization failed:", error)
-      throw error
+  static getInstance(): DataManager {
+    if (!DataManager.instance) {
+      DataManager.instance = new DataManager()
     }
+    return DataManager.instance
   }
 
-  private async migrateData(): Promise<void> {
-    try {
-      const currentVersion = localStorage.getItem(STORAGE_KEYS.VERSION)
+  private async initDB(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.dbName, this.dbVersion)
 
-      if (!currentVersion || currentVersion !== DATA_VERSION) {
-        console.log("🔄 Migrating data to version", DATA_VERSION)
-
-        // Perform migration logic here
-        const userData = await this.loadCompleteData()
-        userData.version = DATA_VERSION
-        await this.saveCompleteData(userData)
-
-        localStorage.setItem(STORAGE_KEYS.VERSION, DATA_VERSION)
-        console.log("✅ Data migration completed")
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => {
+        this.db = request.result
+        resolve()
       }
-    } catch (error) {
-      console.error("❌ Data migration failed:", error)
-    }
-  }
 
-  private setupAutomaticBackup(): void {
-    // Backup every 30 minutes
-    setInterval(
-      async () => {
-        try {
-          await this.createBackup()
-        } catch (error) {
-          console.error("❌ Automatic backup failed:", error)
+      request.onupgradeneeded = (event) => {
+        const db = (event.target as IDBOpenDBRequest).result
+
+        // Create object stores
+        if (!db.objectStoreNames.contains("entries")) {
+          const entryStore = db.createObjectStore("entries", { keyPath: "id" })
+          entryStore.createIndex("type", "type", { unique: false })
+          entryStore.createIndex("timestamp", "timestamp", { unique: false })
+          entryStore.createIndex("synced", "synced", { unique: false })
         }
-      },
-      30 * 60 * 1000,
-    )
-  }
 
-  private setupCleanup(): void {
-    // Cleanup old data every hour
-    setInterval(
-      () => {
-        this.cleanupOldData()
-      },
-      60 * 60 * 1000,
-    )
-  }
+        if (!db.objectStoreNames.contains("settings")) {
+          db.createObjectStore("settings", { keyPath: "key" })
+        }
 
-  async loadCompleteData(): Promise<UserData> {
-    try {
-      const rawData = localStorage.getItem(STORAGE_KEYS.USER_DATA)
-
-      if (!rawData) {
-        return this.getDefaultUserData()
-      }
-
-      const parsedData = this.parsePossiblyEncrypted(rawData)
-
-      // Validate and merge with defaults
-      const defaultData = this.getDefaultUserData()
-      const userData = { ...defaultData, ...parsedData }
-
-      // Ensure version is current
-      userData.version = DATA_VERSION
-
-      return userData
-    } catch (error) {
-      console.error("❌ Failed to load user data:", error)
-      return this.getDefaultUserData()
-    }
-  }
-
-  async saveCompleteData(userData: UserData): Promise<void> {
-    try {
-      userData.lastModified = new Date().toISOString()
-      userData.version = DATA_VERSION
-
-      const dataToSave = JSON.stringify(userData)
-      const encryptedData = userData.settings.encryptionEnabled ? safeBtoa(dataToSave) : dataToSave
-
-      localStorage.setItem(STORAGE_KEYS.USER_DATA, encryptedData)
-
-      // Also save to backup if enabled
-      if (userData.settings.backupEnabled) {
-        await this.createBackup()
-      }
-    } catch (error) {
-      console.error("❌ Failed to save user data:", error)
-      throw error
-    }
-  }
-
-  private parsePossiblyEncrypted(data: string): any {
-    try {
-      // First try to parse as regular JSON
-      return JSON.parse(data)
-    } catch {
-      // If that fails, try to decode as base64 first
-      if (isProbablyBase64(data)) {
-        const decoded = safeAtob(data)
-        if (decoded) {
-          try {
-            return JSON.parse(decoded)
-          } catch {
-            // If base64 decode worked but JSON parse failed, return empty object
-            return {}
-          }
+        if (!db.objectStoreNames.contains("cache")) {
+          const cacheStore = db.createObjectStore("cache", { keyPath: "key" })
+          cacheStore.createIndex("timestamp", "timestamp", { unique: false })
         }
       }
-      // If all else fails, return empty object
-      return {}
-    }
+    })
   }
 
-  private getDefaultUserData(): UserData {
+  async saveEntry(entry: Omit<DataEntry, "id" | "timestamp">): Promise<string> {
+    if (!this.db) await this.initDB()
+
+    const fullEntry: DataEntry = {
+      ...entry,
+      id: `${entry.type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      timestamp: Date.now(),
+      synced: false,
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["entries"], "readwrite")
+      const store = transaction.objectStore("entries")
+      const request = store.add(fullEntry)
+
+      request.onsuccess = () => resolve(fullEntry.id)
+      request.onerror = () => reject(request.error)
+    })
+  }
+
+  async getEntry(id: string): Promise<DataEntry | null> {
+    if (!this.db) await this.initDB()
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["entries"], "readonly")
+      const store = transaction.objectStore("entries")
+      const request = store.get(id)
+
+      request.onsuccess = () => resolve(request.result || null)
+      request.onerror = () => reject(request.error)
+    })
+  }
+
+  async getEntriesByType(type: DataEntry["type"]): Promise<DataEntry[]> {
+    if (!this.db) await this.initDB()
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["entries"], "readonly")
+      const store = transaction.objectStore("entries")
+      const index = store.index("type")
+      const request = index.getAll(type)
+
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+  }
+
+  async getAllEntries(): Promise<DataEntry[]> {
+    if (!this.db) await this.initDB()
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["entries"], "readonly")
+      const store = transaction.objectStore("entries")
+      const request = store.getAll()
+
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+  }
+
+  async updateEntry(id: string, updates: Partial<DataEntry>): Promise<void> {
+    if (!this.db) await this.initDB()
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["entries"], "readwrite")
+      const store = transaction.objectStore("entries")
+
+      const getRequest = store.get(id)
+      getRequest.onsuccess = () => {
+        const entry = getRequest.result
+        if (entry) {
+          const updatedEntry = { ...entry, ...updates }
+          const putRequest = store.put(updatedEntry)
+          putRequest.onsuccess = () => resolve()
+          putRequest.onerror = () => reject(putRequest.error)
+        } else {
+          reject(new Error("Entry not found"))
+        }
+      }
+      getRequest.onerror = () => reject(getRequest.error)
+    })
+  }
+
+  async deleteEntry(id: string): Promise<void> {
+    if (!this.db) await this.initDB()
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["entries"], "readwrite")
+      const store = transaction.objectStore("entries")
+      const request = store.delete(id)
+
+      request.onsuccess = () => resolve()
+      request.onerror = () => reject(request.error)
+    })
+  }
+
+  async getUnsyncedEntries(): Promise<DataEntry[]> {
+    if (!this.db) await this.initDB()
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["entries"], "readonly")
+      const store = transaction.objectStore("entries")
+      const index = store.index("synced")
+      const request = index.getAll(false)
+
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+  }
+
+  async markAsSynced(id: string): Promise<void> {
+    await this.updateEntry(id, { synced: true, syncedAt: Date.now() })
+  }
+
+  async getSyncStatus(): Promise<SyncStatus> {
+    const unsyncedEntries = await this.getUnsyncedEntries()
+    const lastSyncSetting = await this.getSetting("lastSync")
+
     return {
-      version: DATA_VERSION,
-      profile: {
-        age: 25,
-        height: "5'8\"",
-        weight: "150 lbs",
-      },
-      stats: { MIND: 0, BODY: 0, SPIRIT: 0, WORK: 0, PLAY: 0 },
-      habits: [],
-      journalEntries: [],
-      checkIns: [],
-      todos: [],
-      missions: [],
-      settings: {
-        preferredCheckInTime: "20:00",
-        notificationsEnabled: true,
-        backupEnabled: true,
-        encryptionEnabled: false,
-      },
-      lastModified: new Date().toISOString(),
+      lastSync: lastSyncSetting ? Number.parseInt(lastSyncSetting) : 0,
+      pendingItems: unsyncedEntries.length,
+      isOnline: navigator.onLine,
+      isSyncing: false, // This would be managed by sync manager
     }
   }
 
-  async createBackup(): Promise<void> {
-    try {
-      const userData = await this.loadCompleteData()
-      userData.lastBackup = new Date().toISOString()
+  async setSetting(key: string, value: string): Promise<void> {
+    if (!this.db) await this.initDB()
 
-      const backupData = {
-        ...userData,
-        backupCreated: new Date().toISOString(),
-      }
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["settings"], "readwrite")
+      const store = transaction.objectStore("settings")
+      const request = store.put({ key, value, timestamp: Date.now() })
 
-      localStorage.setItem(STORAGE_KEYS.BACKUP_DATA, JSON.stringify(backupData))
-      console.log("✅ Backup created successfully")
-    } catch (error) {
-      console.error("❌ Backup creation failed:", error)
-      throw error
-    }
+      request.onsuccess = () => resolve()
+      request.onerror = () => reject(request.error)
+    })
   }
 
-  async restoreFromBackup(): Promise<boolean> {
-    try {
-      const backupData = localStorage.getItem(STORAGE_KEYS.BACKUP_DATA)
+  async getSetting(key: string): Promise<string | null> {
+    if (!this.db) await this.initDB()
 
-      if (!backupData) {
-        throw new Error("No backup data found")
-      }
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["settings"], "readonly")
+      const store = transaction.objectStore("settings")
+      const request = store.get(key)
 
-      const parsedBackup = JSON.parse(backupData)
-      await this.saveCompleteData(parsedBackup)
+      request.onsuccess = () => resolve(request.result?.value || null)
+      request.onerror = () => reject(request.error)
+    })
+  }
 
-      console.log("✅ Data restored from backup")
-      return true
-    } catch (error) {
-      console.error("❌ Backup restoration failed:", error)
-      return false
+  async cacheData(key: string, data: any, ttl = 3600000): Promise<void> {
+    if (!this.db) await this.initDB()
+
+    const cacheEntry = {
+      key,
+      data,
+      timestamp: Date.now(),
+      expires: Date.now() + ttl,
     }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["cache"], "readwrite")
+      const store = transaction.objectStore("cache")
+      const request = store.put(cacheEntry)
+
+      request.onsuccess = () => resolve()
+      request.onerror = () => reject(request.error)
+    })
+  }
+
+  async getCachedData(key: string): Promise<any | null> {
+    if (!this.db) await this.initDB()
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["cache"], "readonly")
+      const store = transaction.objectStore("cache")
+      const request = store.get(key)
+
+      request.onsuccess = () => {
+        const result = request.result
+        if (result && result.expires > Date.now()) {
+          resolve(result.data)
+        } else {
+          resolve(null)
+        }
+      }
+      request.onerror = () => reject(request.error)
+    })
+  }
+
+  async clearExpiredCache(): Promise<void> {
+    if (!this.db) await this.initDB()
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["cache"], "readwrite")
+      const store = transaction.objectStore("cache")
+      const index = store.index("timestamp")
+      const request = index.openCursor()
+
+      request.onsuccess = (event) => {
+        const cursor = (event.target as IDBRequest).result
+        if (cursor) {
+          const entry = cursor.value
+          if (entry.expires <= Date.now()) {
+            cursor.delete()
+          }
+          cursor.continue()
+        } else {
+          resolve()
+        }
+      }
+      request.onerror = () => reject(request.error)
+    })
   }
 
   async exportData(): Promise<string> {
-    try {
-      const userData = await this.loadCompleteData()
-      return JSON.stringify(userData, null, 2)
-    } catch (error) {
-      console.error("❌ Data export failed:", error)
-      throw error
-    }
-  }
-
-  async importData(jsonData: string): Promise<boolean> {
-    try {
-      const importedData = JSON.parse(jsonData)
-
-      // Validate imported data structure
-      if (!this.validateUserData(importedData)) {
-        throw new Error("Invalid data format")
-      }
-
-      await this.saveCompleteData(importedData)
-      console.log("✅ Data imported successfully")
-      return true
-    } catch (error) {
-      console.error("❌ Data import failed:", error)
-      return false
-    }
-  }
-
-  private validateUserData(data: any): boolean {
-    return (
-      data &&
-      typeof data === "object" &&
-      data.profile &&
-      data.stats &&
-      Array.isArray(data.habits) &&
-      Array.isArray(data.journalEntries) &&
-      Array.isArray(data.checkIns) &&
-      Array.isArray(data.todos) &&
-      Array.isArray(data.missions)
+    const entries = await this.getAllEntries()
+    return JSON.stringify(
+      {
+        version: this.dbVersion,
+        timestamp: Date.now(),
+        entries,
+      },
+      null,
+      2,
     )
   }
 
-  private cleanupOldData(): void {
+  async importData(jsonData: string): Promise<void> {
     try {
-      // Remove old journal entries (older than 1 year)
-      const oneYearAgo = new Date()
-      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
+      const data = JSON.parse(jsonData)
 
-      // This would be implemented based on specific cleanup requirements
-      console.log("🧹 Cleanup routine executed")
-    } catch (error) {
-      console.error("❌ Cleanup failed:", error)
-    }
-  }
+      if (data.entries && Array.isArray(data.entries)) {
+        for (const entry of data.entries) {
+          // Generate new ID to avoid conflicts
+          const newEntry = {
+            ...entry,
+            id: `imported-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            synced: false,
+          }
 
-  getStorageUsage(): { used: number; total: number; percentage: number } {
-    try {
-      let used = 0
-      for (const key in localStorage) {
-        if (localStorage.hasOwnProperty(key)) {
-          used += localStorage[key].length + key.length
+          await new Promise<void>((resolve, reject) => {
+            const transaction = this.db!.transaction(["entries"], "readwrite")
+            const store = transaction.objectStore("entries")
+            const request = store.add(newEntry)
+
+            request.onsuccess = () => resolve()
+            request.onerror = () => reject(request.error)
+          })
         }
       }
-
-      // Estimate total available (5MB typical limit)
-      const total = 5 * 1024 * 1024
-      const percentage = (used / total) * 100
-
-      return { used, total, percentage }
     } catch (error) {
-      console.error("❌ Failed to calculate storage usage:", error)
-      return { used: 0, total: 0, percentage: 0 }
+      throw new Error("Invalid data format")
     }
+  }
+
+  async clearAllData(): Promise<void> {
+    if (!this.db) await this.initDB()
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["entries", "settings", "cache"], "readwrite")
+
+      const clearEntries = transaction.objectStore("entries").clear()
+      const clearSettings = transaction.objectStore("settings").clear()
+      const clearCache = transaction.objectStore("cache").clear()
+
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error)
+    })
   }
 }
 
-// Create singleton instance
-export const DataManager = new DataManagerClass()
-
-// Generate daily missions
-export function generateDailyMissions(): Mission[] {
-  const today = new Date()
-  const missions: Mission[] = [
-    {
-      id: `mission_${today.toDateString()}_1`,
-      title: "Morning Reflection",
-      description: "Write a journal entry about your goals for today",
-      stat: "MIND",
-      xpReward: 25,
-      completed: false,
-      createdAt: today.toISOString(),
-      difficulty: "easy",
-    },
-    {
-      id: `mission_${today.toDateString()}_2`,
-      title: "Physical Activity",
-      description: "Complete at least 30 minutes of physical exercise",
-      stat: "BODY",
-      xpReward: 30,
-      completed: false,
-      createdAt: today.toISOString(),
-      difficulty: "medium",
-    },
-    {
-      id: `mission_${today.toDateString()}_3`,
-      title: "Mindful Moment",
-      description: "Take 10 minutes for meditation or deep breathing",
-      stat: "SPIRIT",
-      xpReward: 20,
-      completed: false,
-      createdAt: today.toISOString(),
-      difficulty: "easy",
-    },
-  ]
-
-  return missions
-}
-
-// Default export for backward compatibility
-export default DataManager
+export const dataManager = DataManager.getInstance()

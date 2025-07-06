@@ -22,20 +22,20 @@ import { HealthMonitoringService, type HealthAlert, type HealthMetrics } from "@
 
 interface SmartDashboardProps {
   stats: any
-  habits: any[]
-  checkIns: any[]
-  journalEntries: any[]
-  todos: any[]
+  habits?: any[]
+  checkIns?: any[]
+  journalEntries?: any[]
+  todos?: any[]
   onAddGoal: (goal: SmartGoal) => void
   onDismissAlert: (alertId: string) => void
 }
 
 export default function SmartDashboard({
   stats,
-  habits,
-  checkIns,
-  journalEntries,
-  todos,
+  habits = [],
+  checkIns = [],
+  journalEntries = [],
+  todos = [],
   onAddGoal,
   onDismissAlert,
 }: SmartDashboardProps) {
