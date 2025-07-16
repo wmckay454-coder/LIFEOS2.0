@@ -109,7 +109,12 @@ export default function HomePage() {
 
           {/* Dashboard Tab */}
           <TabsContent value="dashboard" className="mt-6">
-            <SmartDashboard />
+            <SmartDashboard
+  stats={{ tasksCompleted: 0, totalGoals: 3 }} 
+  onAddGoal={() => {}} 
+  onDismissAlert={() => {}} 
+/>
+
           </TabsContent>
 
           {/* Notifications Tab */}
