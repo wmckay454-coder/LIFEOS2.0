@@ -114,7 +114,6 @@ export default function HomePage() {
   onAddGoal={() => {}} 
   onDismissAlert={() => {}} 
 />
-
           </TabsContent>
 
           {/* Notifications Tab */}
