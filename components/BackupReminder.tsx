@@ -1,6 +1,6 @@
 'use client'
 import React from 'react'
-import { DataManager } from '@/lib/utils/dataManager'
+import { dataManager } from '@/lib/utils/dataManager'
 
 interface BackupReminderProps {
   onClose: () => void
@@ -9,7 +9,7 @@ interface BackupReminderProps {
 
 export default function BackupReminder({ onClose, onBackup }: BackupReminderProps) {
   const handleBackup = () => {
-    DataManager.downloadBackup()
+    dataManager.downloadBackup()
     DataManager.markBackupReminderShown()
     onBackup()
     onClose()
