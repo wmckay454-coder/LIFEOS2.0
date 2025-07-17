@@ -206,6 +206,11 @@ export class DataManager {
     })
   }
 
+  async markBackupReminderShown(): Promise<void> {
+  await this.setSetting("backupReminderShown", "true")
+}
+
+
   async getSetting(key: string): Promise<string | null> {
     if (!this.db) await this.initDB()
 
