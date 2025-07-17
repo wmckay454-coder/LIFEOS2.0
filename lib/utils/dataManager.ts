@@ -362,3 +362,9 @@ downloadBackup(): void {
 
 
 export const dataManager = DataManager.getInstance()
+export const STORAGE_KEYS = {
+  BACKUP_REMINDER: "backupReminderShown",
+  LAST_SYNC: "lastSync",
+}
+
+export const DATA_VERSION = "1.0.0"
