@@ -10,13 +10,13 @@ interface BackupReminderProps {
 export default function BackupReminder({ onClose, onBackup }: BackupReminderProps) {
   const handleBackup = () => {
     dataManager.downloadBackup()
-    DataManager.markBackupReminderShown()
+    dataManager.markBackupReminderShown()
     onBackup()
     onClose()
   }
 
   const handleSkip = () => {
-    DataManager.markBackupReminderShown()
+    dataManager.markBackupReminderShown()
     onClose()
   }
 
