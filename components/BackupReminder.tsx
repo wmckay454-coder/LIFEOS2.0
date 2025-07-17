@@ -1,6 +1,6 @@
 'use client'
 import React from 'react'
-import { dataManager } from '@/lib/utils/dataManager'
+import { dataManager } from '@/lib/utils/DataManager'
 
 interface BackupReminderProps {
   onClose: () => void
