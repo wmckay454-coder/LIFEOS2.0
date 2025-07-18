@@ -9,11 +9,27 @@ import SmartDashboard from "@/components/SmartDashboard"
 import NotificationScheduler from "@/components/NotificationScheduler"
 import PWAStatus from "@/components/PWAStatus"
 import { Bell, Calendar, Settings, Smartphone, Brain, Home, CheckCircle, Clock, Zap } from "lucide-react"
+import { dataManager } from "@/lib/utils/dataManager";
+
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState("dashboard")
   const [isOnline, setIsOnline] = useState(true)
   const [notificationCount, setNotificationCount] = useState(0)
+
+  
+const [stats, setStats] = useState<SyncStatus>({
+  lastSync: 0,
+  pendingItems: 0,
+  isOnline: navigator.onLine,
+  isSyncing: false,
+});
+
+useEffect(() => {
+  dataManager.getSyncStatus().then(setStats);
+  // optional: window.addEventListener("online"/"offline", …) to update isOnline
+}, []);
+
 
   useEffect(() => {
     // Check online status
@@ -110,10 +126,15 @@ export default function HomePage() {
           {/* Dashboard Tab */}
           <TabsContent value="dashboard" className="mt-6">
             <SmartDashboard
-  stats={{ tasksCompleted: 0, totalGoals: 3 }} 
-  onAddGoal={() => {}} 
-  onDismissAlert={() => {}} 
+  stats={stats}
+  onAddGoal={(goal) => {
+    /* e.g. dataManager.saveEntry({ type: "goal", title: goal.title, content: goal }) */
+  }}
+  onDismissAlert={() => {
+    /* any “clear notification” logic */
+  }}
 />
+
           </TabsContent>
 
           {/* Notifications Tab */}
