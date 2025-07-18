@@ -19,6 +19,14 @@ import {
 import { GoalSettingEngine, type SmartGoal, type GoalRecommendation } from "@/lib/ai/goal-setting-engine"
 import { ContextualRecommendationEngine, type ContextualRecommendation } from "@/lib/ai/contextual-recommendations"
 import { HealthMonitoringService, type HealthAlert, type HealthMetrics } from "@/lib/ai/health-monitoring"
+import { DataEntry, SyncStatus } from "@/lib/utils/dataManager";
+
+interface SmartDashboardProps {
+  stats: SyncStatus;
+  onAddGoal: (goal: Partial<DataEntry>) => void;
+  onDismissAlert: () => void;
+}
+
 
 interface SmartDashboardProps {
   stats: any
